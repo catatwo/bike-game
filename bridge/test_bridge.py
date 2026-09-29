@@ -12,13 +12,19 @@ import ftms
 
 
 class FakeClient:
-    """Stands in for bleak's BleakClient, answering like an FTMS bike."""
+    """Stands in for bleak's BleakClient, answering like an FTMS bike.
 
-    def __init__(self, target_features):
+    refuse: opcode -> how many times to refuse it, and with what result
+    (like a bike that refuses control until it's started). silent: never
+    answers at all, like some bikes."""
+
+    def __init__(self, target_features, refuse=None, silent=False):
         self.feature = struct.pack("<II", 0x4000, target_features)
         self.is_connected = True
         self.handlers = {}
         self.writes = []
+        self.refuse = dict(refuse or {})
+        self.silent = silent
 
     async def read_gatt_char(self, uuid):
         assert uuid == ftms.FEATURE
@@ -31,10 +37,20 @@ class FakeClient:
         assert uuid == ftms.CONTROL_POINT
         assert ftms.CONTROL_POINT in self.handlers, "indications not on yet"
         self.writes.append(bytes(data))
-        self.handlers[uuid](None, bytearray([0x80, data[0], 0x01]))
+        if self.silent:
+            return
+        result = 0x01
+        times, code = self.refuse.get(data[0], (0, 0x01))
+        if times > 0:
+            self.refuse[data[0]] = (times - 1, code)
+            result = code
+        self.handlers[uuid](None, bytearray([0x80, data[0], result]))
 
     def notify(self, hexdata):
         self.handlers[ftms.INDOOR_BIKE_DATA](None, bytearray.fromhex(hexdata))
+
+    def status(self, code):
+        self.handlers[ftms.STATUS](None, bytearray([code]))
 
 
 async def until(check, timeout=2.0):
@@ -48,18 +64,22 @@ async def until(check, timeout=2.0):
 
 class Ride(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self._gap = bikebridge.MIN_WRITE_GAP
+        self._saved = (bikebridge.MIN_WRITE_GAP, bikebridge.CONTROL_RETRY,
+                       bikebridge.ANSWER_WAIT)
         bikebridge.MIN_WRITE_GAP = 0
+        bikebridge.CONTROL_RETRY = 0.05
+        bikebridge.ANSWER_WAIT = 0.1
 
     def tearDown(self):
-        bikebridge.MIN_WRITE_GAP = self._gap
+        (bikebridge.MIN_WRITE_GAP, bikebridge.CONTROL_RETRY,
+         bikebridge.ANSWER_WAIT) = self._saved
 
-    async def start(self, target_features):
+    async def start(self, target_features, **fake):
         self.link = bikebridge.Link()
         self.sent = []
         self.link.send = lambda **msg: self.sent.append(msg)
         self.state = {}
-        self.client = FakeClient(target_features)
+        self.client = FakeClient(target_features, **fake)
         self.task = asyncio.create_task(
             bikebridge.ride(self.client, self.link, self.state))
         self.addAsyncCleanup(self.stop)
@@ -95,6 +115,69 @@ class Ride(unittest.IsolatedAsyncioTestCase):
         await until(lambda: len(self.client.writes) == 3)
         self.assertEqual(self.client.writes[-1], ftms.set_target_power(220))
         self.assertTrue(self.state["erg"])
+
+    async def test_keeps_asking_until_a_just_switched_on_bike_agrees(self):
+        # Straight after power-on the bike refuses control, then refuses to
+        # start: the bridge asks again until it agrees, then sends the hill.
+        await self.start(1 << 13, refuse={
+            ftms.OP_REQUEST_CONTROL: (2, 0x05),   # control not permitted
+            ftms.OP_START_OR_RESUME: (1, 0x04),   # operation failed
+        })
+        self.link.datagram_received(b'{"grade": 3}', None)
+        await until(lambda: self.client.writes[-1:] == [ftms.set_simulation(3)])
+        control = ftms.request_control()
+        go = ftms.start_or_resume()
+        self.assertEqual(self.client.writes[:6], [control, control, control, go,
+                                                  control, go])
+        self.assertTrue(self.state["controlled"])
+
+    async def test_no_commands_until_the_bike_agrees(self):
+        await self.start(1 << 13, refuse={ftms.OP_REQUEST_CONTROL: (1000, 0x05)})
+        self.link.datagram_received(b'{"grade": 3}', None)
+        await asyncio.sleep(0.3)
+        self.assertGreater(len(self.client.writes), 2)
+        self.assertEqual(set(self.client.writes), {ftms.request_control()})
+        self.assertFalse(self.state["controlled"])
+
+    async def test_takes_control_again_when_the_bike_loses_it(self):
+        await self.start(1 << 13)
+        self.link.datagram_received(b'{"grade": 2}', None)
+        await until(lambda: self.client.writes[-1:] == [ftms.set_simulation(2)])
+        before = len(self.client.writes)
+        for code in (ftms.STATUS_CONTROL_LOST, ftms.STATUS_RESET,
+                     ftms.STATUS_STOPPED_BY_USER):
+            self.client.status(code)
+            await until(lambda: len(self.client.writes) >= before + 3)
+            self.assertEqual(self.client.writes[before:before + 3], [
+                ftms.request_control(), ftms.start_or_resume(), ftms.set_simulation(2)])
+            self.assertTrue(self.state["controlled"])
+            self.assertGreater(len(self.client.writes), before)
+            before = len(self.client.writes)
+
+    async def test_play_on_the_bike_is_answered_at_once(self):
+        await self.start(1 << 13, refuse={ftms.OP_REQUEST_CONTROL: (1, 0x05)})
+        bikebridge.CONTROL_RETRY = 60  # would wait a minute, but play is pressed
+        await until(lambda: len(self.client.writes) == 1)
+        self.client.status(ftms.STATUS_STARTED_BY_USER)
+        await until(lambda: self.state.get("controlled"), timeout=1.0)
+
+    async def test_a_refused_command_retakes_control(self):
+        await self.start(1 << 3)
+        await until(lambda: self.state.get("controlled"))
+        self.client.refuse[ftms.OP_SET_TARGET_POWER] = (1, 0x05)
+        before = len(self.client.writes)
+        self.link.datagram_received(b'{"power": 180}', None)
+        await until(lambda: len(self.client.writes) >= before + 4)
+        self.assertEqual(self.client.writes[before:before + 4], [
+            ftms.set_target_power(180), ftms.request_control(),
+            ftms.start_or_resume(), ftms.set_target_power(180)])
+
+    async def test_a_bike_that_never_answers_still_gets_commands(self):
+        await self.start(1 << 13, silent=True)
+        self.link.datagram_received(b'{"grade": 4}', None)
+        await until(lambda: self.client.writes[-1:] == [ftms.set_simulation(4)])
+        self.assertEqual(self.client.writes[:2], [ftms.request_control(),
+                                                  ftms.start_or_resume()])
 
     async def test_returns_when_the_bike_disconnects(self):
         await self.start(1 << 13)

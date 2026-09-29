@@ -18,6 +18,7 @@ var bike_name := ""
 var bike_connected := false
 var bridge_state := ""  # searching, connected, or no_adapter
 var erg := false
+var controlled := true  # the bike has accepted control, so it takes the gradient and wattage
 var demo_watts := 0.0
 var demo_grade := 0.0  # set by the game, so the demo rider feels the hills
 var demo_max := INF  # the most the demo rider can push, to try out the FTP test
@@ -69,6 +70,7 @@ func handle(msg: Dictionary) -> void:
 			var n = msg.get("bike")
 			bike_name = n if n is String else ""
 			erg = msg.get("erg") == true
+			controlled = msg.get("controlled", true) == true  # an older bridge doesn't say
 		"ride":
 			_since_reading = 0.0
 			var p = msg.get("power")

@@ -602,10 +602,19 @@ func _bike_status() -> void:
 		menu.set_status("No Bluetooth adapter found on this computer", UiStyle.WARN)
 	elif not link.bike_connected:
 		menu.set_status("Switch on the bike", UiStyle.DIM)
+	elif not link.controlled:
+		menu.set_status("Bike connected: %s  -  asking it to take control (or press play on the bike)"
+				% link.bike_name, UiStyle.WARN)
 	else:
 		var extra := "  -  holds wattages for workouts" if link.erg else ""
 		menu.set_status("Bike connected: %s%s" % [link.bike_name, extra], UiStyle.GOOD)
-	hud.set_status("Bike disconnected" if state == State.RIDE and not link.bike_connected else "")
+	var ride_status := ""
+	if state == State.RIDE:
+		if not link.bike_connected:
+			ride_status = "Bike disconnected"
+		elif not link.controlled:
+			ride_status = "The bike isn't taking the hills yet: press play on it"
+	hud.set_status(ride_status)
 
 
 func _on_connected(is_connected: bool) -> void:

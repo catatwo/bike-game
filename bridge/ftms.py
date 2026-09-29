@@ -17,12 +17,29 @@ SERVICE = _uuid(0x1826)
 FEATURE = _uuid(0x2ACC)
 INDOOR_BIKE_DATA = _uuid(0x2AD2)
 CONTROL_POINT = _uuid(0x2AD9)
+STATUS = _uuid(0x2ADA)  # Fitness Machine Status: what happened on the bike
 
 OP_REQUEST_CONTROL = 0x00
 OP_SET_TARGET_POWER = 0x05
 OP_START_OR_RESUME = 0x07
 OP_SET_SIMULATION = 0x11
 OP_RESPONSE = 0x80
+
+# Fitness Machine Status codes that mean the bike isn't taking our commands
+# any more: it was reset, stopped (or paused) on its own console, or it
+# says so outright. The bridge takes control and starts it again on these.
+STATUS_RESET = 0x01
+STATUS_STOPPED_BY_USER = 0x02
+STATUS_STOPPED_BY_SAFETY_KEY = 0x03
+STATUS_STARTED_BY_USER = 0x04
+STATUS_CONTROL_LOST = 0xFF
+STATUS_NAMES = {
+    STATUS_RESET: "reset",
+    STATUS_STOPPED_BY_USER: "stopped or paused on the bike",
+    STATUS_STOPPED_BY_SAFETY_KEY: "stopped by the safety key",
+    STATUS_STARTED_BY_USER: "started on the bike",
+    STATUS_CONTROL_LOST: "control lost",
+}
 
 RESULTS = {
     0x01: "success",
@@ -136,6 +153,13 @@ def set_simulation(grade_pct: float, wind_mps: float = 0.0,
 def set_target_power(watts: float) -> bytes:
     return struct.pack("<Bh", OP_SET_TARGET_POWER,
                        _clamp(round(watts), -32768, 32767))
+
+
+def parse_status(data: bytes) -> tuple[int, str] | None:
+    """(code, what it means) from a Fitness Machine Status notification."""
+    if not data:
+        return None
+    return data[0], STATUS_NAMES.get(data[0], f"status 0x{data[0]:02x}")
 
 
 def parse_response(data: bytes) -> tuple[int, str] | None:

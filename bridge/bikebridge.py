@@ -3,7 +3,10 @@
 
 bike -> game, JSON datagrams to 127.0.0.1:47810
     {"type": "status", "state": "searching" | "connected" | "no_adapter",
-     "bike": name, "simulation": bool, "erg": bool}         every second
+     "bike": name, "simulation": bool, "erg": bool,
+     "controlled": bool}                                   every second
+        (controlled: the bike has accepted control and started, so it
+        takes the gradient and wattage; until then it's only read)
     {"type": "ride", "power": W, "cadence": rpm, "speed": km/h}  per reading
 game -> bike, JSON datagrams to 127.0.0.1:47811
     {"grade": percent}   ride a hill (the bike sets its own resistance)
@@ -33,6 +36,8 @@ STATE_FILE = (Path(os.environ.get("XDG_STATE_HOME",
                                   Path.home() / ".local/state"))
               / "bike-game/bike-address")
 MIN_WRITE_GAP = 0.5  # seconds between commands to the bike
+CONTROL_RETRY = 3.0  # seconds between asks when the bike refuses control
+ANSWER_WAIT = 3.0  # seconds to wait for the bike to answer a command
 ADAPTER_RETRY = 15.0  # seconds between looks for a Bluetooth adapter
 
 log = logging.getLogger("bikebridge")
@@ -88,14 +93,23 @@ def command_for(target: dict, features: ftms.Features) -> bytes | None:
 
 async def ride(client, link: Link, state: dict):
     """One connected session, until the bike disconnects. `client` is a
-    bleak BleakClient, or anything with the same four members."""
+    bleak BleakClient, or anything with the same four members.
+
+    The bike only takes commands once it has granted control and started
+    (the same as pressing play on its console). Straight after power-on it
+    may refuse both, so the bridge keeps asking until it agrees, and asks
+    again whenever the bike reports it was reset, stopped or lost control,
+    or refuses a command."""
     features = ftms.parse_features(await client.read_gatt_char(ftms.FEATURE))
     state["simulation"] = features.simulation
     state["erg"] = features.target_power
+    state["controlled"] = False
     log.info("bike can ride hills: %s, hold a wattage: %s",
              features.simulation, features.target_power)
 
     reading = {"power": None, "cadence": None, "speed": None}
+    answers: dict[int, asyncio.Future] = {}
+    lost = asyncio.Event()  # the bike needs taking control of again
 
     def on_data(_, data):
         try:
@@ -112,33 +126,97 @@ async def ride(client, link: Link, state: dict):
 
     def on_control(_, data):
         response = ftms.parse_response(bytes(data))
-        if response and response[1] != "success":
-            log.warning("bike refused command 0x%02x: %s", *response)
+        if response is None:
+            return
+        op, result = response
+        waiting = answers.pop(op, None)
+        if waiting and not waiting.done():
+            waiting.set_result(result)
+        if result == "control not permitted" and state["controlled"]:
+            log.warning("bike stopped taking commands (0x%02x refused)", op)
+            state["controlled"] = False
+            lost.set()
+
+    def on_status(_, data):
+        status = ftms.parse_status(bytes(data))
+        if status is None:
+            return
+        code, meaning = status
+        log.info("bike: %s", meaning)
+        if code in (ftms.STATUS_RESET, ftms.STATUS_STOPPED_BY_USER,
+                    ftms.STATUS_STOPPED_BY_SAFETY_KEY, ftms.STATUS_CONTROL_LOST):
+            state["controlled"] = False
+            lost.set()
+        elif code == ftms.STATUS_STARTED_BY_USER and not state["controlled"]:
+            lost.set()  # play was pressed: ask again now
+
+    async def command(data: bytes) -> str:
+        """Writes a command and waits for the bike's answer: its result,
+        or "no answer" from a bike that doesn't reply."""
+        waiting = asyncio.get_running_loop().create_future()
+        answers[data[0]] = waiting
+        try:
+            await client.write_gatt_char(ftms.CONTROL_POINT, data, response=True)
+            return await asyncio.wait_for(waiting, ANSWER_WAIT)
+        except TimeoutError:
+            return "no answer"
+        except Exception as exc:  # bleak raises many kinds
+            return f"write failed: {exc}"
+        finally:
+            answers.pop(data[0], None)
+
+    async def take_control():
+        """Asks for control, then to start, until the bike agrees (or doesn't
+        answer at all, which some bikes don't: then carry on as if it did)."""
+        told = ""
+        while client.is_connected:
+            lost.clear()
+            got = await command(ftms.request_control())
+            if got in ("success", "no answer"):
+                got = await command(ftms.start_or_resume())
+            if got in ("success", "no answer"):
+                state["controlled"] = True
+                log.info("bike accepted control%s", "" if got == "success" else " (it doesn't answer)")
+                link.changed.set()  # send whatever the game already asked for
+                return
+            if got != told:
+                told = got
+                log.warning("bike refused control (%s); asking again every %gs, "
+                            "or press play on the bike", got, CONTROL_RETRY)
+            try:
+                await asyncio.wait_for(lost.wait(), CONTROL_RETRY)
+            except TimeoutError:
+                pass
 
     # Indications must be on before the first write, or the bike can't answer.
     await client.start_notify(ftms.CONTROL_POINT, on_control)
     await client.start_notify(ftms.INDOOR_BIKE_DATA, on_data)
-    await client.write_gatt_char(ftms.CONTROL_POINT, ftms.request_control(),
-                                 response=True)
-    await client.write_gatt_char(ftms.CONTROL_POINT, ftms.start_or_resume(),
-                                 response=True)
+    try:
+        await client.start_notify(ftms.STATUS, on_status)
+    except Exception as exc:  # a bike without the status characteristic
+        log.info("no fitness machine status from this bike: %s", exc)
 
-    link.changed.set()  # send whatever the game already asked for
+    await take_control()
     unsupported = set()
     while client.is_connected:
+        if lost.is_set():
+            await take_control()
+            continue
         try:
             await asyncio.wait_for(link.changed.wait(), 1.0)
         except TimeoutError:
             continue
         link.changed.clear()
-        command = command_for(link.target, features)
-        if command is None:
+        command_bytes = command_for(link.target, features)
+        if command_bytes is None:
             kind = next(iter(link.target))
             if kind not in unsupported:
                 unsupported.add(kind)
                 log.warning("bike doesn't support %s commands", kind)
             continue
-        await client.write_gatt_char(ftms.CONTROL_POINT, command, response=True)
+        got = await command(command_bytes)
+        if got not in ("success", "no answer", "control not permitted"):
+            log.warning("bike refused command 0x%02x: %s", command_bytes[0], got)
         await asyncio.sleep(MIN_WRITE_GAP)
 
 
@@ -163,7 +241,7 @@ async def run_bike(link: Link, state: dict, name: str | None):
     problem = ""
     while True:
         state.update(state="searching", bike=None, simulation=False,
-                     erg=False)
+                     erg=False, controlled=False)
         known = remembered_address()
 
         def is_bike(device, adv):
@@ -202,7 +280,7 @@ async def run_bike(link: Link, state: dict, name: str | None):
 async def run_fake(link: Link, state: dict, watts: float):
     """A steady rider who pushes harder uphill and holds any ERG target."""
     state.update(state="connected", bike="fake bike", simulation=True,
-                 erg=True)
+                 erg=True, controlled=True)
     while True:
         grade = link.target.get("grade", 0.0)
         power = link.target.get("power", watts + 15 * grade)

@@ -81,3 +81,11 @@ class Commands(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Status(unittest.TestCase):
+    def test_status_codes(self):
+        self.assertEqual(ftms.parse_status(bytes([0xFF])), (0xFF, "control lost"))
+        self.assertEqual(ftms.parse_status(bytes([0x04, 0x00])), (0x04, "started on the bike"))
+        self.assertEqual(ftms.parse_status(bytes([0x42]))[1], "status 0x42")
+        self.assertIsNone(ftms.parse_status(b""))

@@ -802,7 +802,10 @@ func test_history_keeps_xp() -> void:
 
 func test_bike_link_reads_the_bridge_messages() -> void:
 	var link := BikeLink.new()
+	link.handle({"type": "status", "state": "connected", "bike": "DOMYOS", "erg": true, "controlled": false})
+	check(not link.controlled, "not controlled yet")
 	link.handle({"type": "status", "state": "connected", "bike": "DOMYOS", "erg": true})
+	check(link.controlled, "an older bridge that doesn't say counts as controlled")
 	link.handle({"type": "ride", "power": 212, "cadence": 88.5, "speed": null})
 	check(link.bike_connected and link.bike_name == "DOMYOS" and link.erg, "status")
 	check(link.power == 212.0 and link.cadence == 88.5, "reading")

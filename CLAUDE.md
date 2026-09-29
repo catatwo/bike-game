@@ -153,6 +153,16 @@ another computer running this bridge, keeps the bridge from finding it.
   in both modes. Don't `exec godot` in the wrapper again: the status would be
   lost. Machine choices (poweroff or not) go in a `compose.override.yaml`,
   which git ignores.
+- 🔴 **The bridge keeps asking the bike for control until it agrees**
+  (`bikebridge.ride`: Request Control, then Start or Resume, every
+  `CONTROL_RETRY` s), and asks again when the bike's Fitness Machine
+  Status says reset, stopped or control lost, or a command is refused with
+  "control not permitted". Asking once wasn't enough: switched on together
+  with the computer, the bike refused while still starting up and only
+  took commands after someone pressed play on it. A bike that never
+  answers is treated as agreeing (as before). The game shows "asking it to
+  take control" until it does. The tests in `test_bridge.py` fail on the
+  old one-shot code.
 - **The bridge keeps retrying when there's no Bluetooth adapter** (state
   `no_adapter`, shown in the game) instead of crash-looping on BlueZ's D-Bus
   timeout.
