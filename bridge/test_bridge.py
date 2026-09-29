@@ -1,10 +1,15 @@
 import asyncio
 import json
+import signal
 import socket
 import struct
+import subprocess
 import sys
+import tempfile
+import time
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import bikebridge
@@ -224,6 +229,155 @@ class NoAdapter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["state"], "no_adapter")
 
 
+class Reconnecting(unittest.IsolatedAsyncioTestCase):
+    """A bike left connected to the computer's Bluetooth by a bridge that
+    ended without disconnecting doesn't advertise, so a search can't find it:
+    the bridge lets go of it, and then finds it."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(bikebridge, "STATE_FILE", self.tmp / "bike"))
+        self.events = []
+        self.stale = False  # BlueZ holds a connection to the bike
+        events = self.events
+        test = self
+
+        class Device:
+            address = "AA:BB"
+            name = "Domyos-Biking-1"
+
+        class Client:
+            def __init__(self, device, **kwargs):
+                self.device = device
+
+            async def __aenter__(self):
+                events.append("connect")
+                return self
+
+            async def __aexit__(self, *exc):
+                events.append("disconnect")
+
+        class Scanner:
+            @staticmethod
+            async def find_device_by_filter(filterfunc, timeout):
+                events.append("scan")
+                await asyncio.sleep(0.01)
+                return None if test.stale else Device()
+
+        async def let_go_of(address):
+            events.append("let go of " + address)
+            was, test.stale = test.stale, False
+            return was
+
+        self.fake = types.ModuleType("bleak")
+        self.fake.BleakClient = Client
+        self.fake.BleakScanner = Scanner
+        self.let_go_of = let_go_of
+
+    async def run_until(self, check):
+        async def ride(client, link, state):
+            self.events.append("ride")
+            await asyncio.sleep(3600)
+
+        with mock.patch.dict(sys.modules, {"bleak": self.fake}), \
+                mock.patch.object(bikebridge, "ride", ride), \
+                mock.patch.object(bikebridge, "let_go_of", self.let_go_of):
+            task = asyncio.create_task(bikebridge.run_bike(bikebridge.Link(), {}, None))
+            await until(check)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_a_bike_left_connected_is_let_go_of_and_found(self):
+        bikebridge.remember("AA:BB")
+        self.stale = True
+        await self.run_until(lambda: "ride" in self.events)
+        self.assertEqual(self.events[:4], ["scan", "let go of AA:BB", "scan", "connect"])
+
+    async def test_nothing_is_disconnected_for_a_bike_never_seen(self):
+        self.stale = True
+        await self.run_until(lambda: self.events.count("scan") >= 3)
+        self.assertEqual(set(self.events), {"scan"})
+
+    async def test_trouble_with_bluez_doesnt_stop_the_search(self):
+        bikebridge.remember("AA:BB")
+        self.stale = True
+
+        async def broken(address):
+            raise RuntimeError("no system bus")
+
+        self.let_go_of = broken
+        await self.run_until(lambda: self.events.count("scan") >= 3)
+
+    async def test_stopping_mid_ride_disconnects_the_bike(self):
+        await self.run_until(lambda: "ride" in self.events)
+        self.assertEqual(self.events[-1], "disconnect")
+
+
+class LetGoOf(unittest.IsolatedAsyncioTestCase):
+    """let_go_of() against a made-up BlueZ on D-Bus."""
+
+    def setUp(self):
+        self.calls = []
+        calls = self.calls
+        test = self
+        self.connected = True
+
+        class Variant:
+            def __init__(self, value):
+                self.value = value
+
+        class Message:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+
+        class Reply:
+            def __init__(self, body, error=False):
+                self.body = body
+                self.message_type = "error" if error else "return"
+
+        class Bus:
+            def __init__(self, bus_type):
+                pass
+
+            async def connect(self):
+                return self
+
+            async def call(self, msg):
+                calls.append((msg.path, msg.member))
+                if msg.member == "GetManagedObjects":
+                    return Reply([{
+                        "/org/bluez/hci0": {"org.bluez.Adapter1": {}},
+                        "/org/bluez/hci0/dev_11_22": {"org.bluez.Device1": {
+                            "Address": Variant("11:22"), "Connected": Variant(True)}},
+                        "/org/bluez/hci0/dev_AA_BB": {"org.bluez.Device1": {
+                            "Address": Variant("AA:BB"),
+                            "Connected": Variant(test.connected)}},
+                    }])
+                return Reply([])
+
+            def disconnect(self):
+                calls.append("closed")
+
+        dbus = types.ModuleType("dbus_fast")
+        dbus.BusType = types.SimpleNamespace(SYSTEM="system")
+        dbus.Message = Message
+        dbus.MessageType = types.SimpleNamespace(ERROR="error")
+        aio = types.ModuleType("dbus_fast.aio")
+        aio.MessageBus = Bus
+        self.enterContext(mock.patch.dict(sys.modules, {"dbus_fast": dbus, "dbus_fast.aio": aio}))
+
+    async def test_disconnects_that_bike_only(self):
+        self.assertTrue(await bikebridge.let_go_of("aa:bb"))
+        self.assertEqual(self.calls, [("/", "GetManagedObjects"),
+                                      ("/org/bluez/hci0/dev_AA_BB", "Disconnect"), "closed"])
+
+    async def test_leaves_a_bike_that_isnt_connected(self):
+        self.connected = False
+        self.assertFalse(await bikebridge.let_go_of("AA:BB"))
+        self.assertEqual(self.calls, [("/", "GetManagedObjects"), "closed"])
+
+
 def free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -262,6 +416,21 @@ class FakeModeOverUdp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status[-1]["state"], "connected")
         self.assertGreater(len(rides), 4)
         self.assertGreater(sum(m["power"] for m in rides) / len(rides), 300)
+
+
+class Stopping(unittest.TestCase):
+    def test_sigterm_ends_it_cleanly(self):
+        # Docker stops it with SIGTERM, and it runs as process 1 there, which
+        # the kernel sends no signal it has no handler for.
+        proc = subprocess.Popen(
+            [sys.executable, str(Path(bikebridge.__file__)), "--fake",
+             "--game-port", str(free_port()), "--bridge-port", str(free_port())],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        time.sleep(1.0)
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertNotIn("Traceback", out)
 
 
 if __name__ == "__main__":

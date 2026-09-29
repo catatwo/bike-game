@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import random
+import signal
 import struct
 from pathlib import Path
 
@@ -247,6 +248,42 @@ def remember(address: str):
         log.warning("can't remember the bike's address: %s", exc)
 
 
+async def let_go_of(address: str) -> bool:
+    """Disconnects the bike at `address` if the computer's Bluetooth (BlueZ)
+    still holds a connection to it. True when it did.
+
+    A bridge that ended without disconnecting (killed, or crashed) leaves
+    the bike connected to BlueZ with nothing using it. A connected bike
+    doesn't advertise, so a search never finds it, and neither does
+    connecting by address: bleak searches for the address first."""
+    from dbus_fast import BusType, Message, MessageType
+    from dbus_fast.aio import MessageBus
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(Message(
+            destination="org.bluez", path="/",
+            interface="org.freedesktop.DBus.ObjectManager",
+            member="GetManagedObjects"))
+        if reply.message_type == MessageType.ERROR:
+            return False
+        for path, interfaces in reply.body[0].items():
+            device = interfaces.get("org.bluez.Device1")
+            if (not device or device["Address"].value.upper() != address.upper()
+                    or not device["Connected"].value):
+                continue
+            reply = await bus.call(Message(
+                destination="org.bluez", path=path,
+                interface="org.bluez.Device1", member="Disconnect"))
+            if reply.message_type == MessageType.ERROR:
+                log.warning("couldn't disconnect %s: %s", address, reply.body)
+                return False
+            return True
+        return False
+    finally:
+        bus.disconnect()
+
+
 async def run_bike(link: Link, state: dict, name: str | None):
     from bleak import BleakClient, BleakScanner
 
@@ -276,6 +313,14 @@ async def run_bike(link: Link, state: dict, name: str | None):
             log.info("Bluetooth works again")
             problem = ""
         if device is None:
+            if known:
+                try:
+                    if await let_go_of(known):
+                        log.info("the bike was still connected to this computer, "
+                                 "with nothing using it: disconnected it, so it "
+                                 "can be found")
+                except Exception as exc:  # D-Bus trouble: keep searching
+                    log.debug("can't check BlueZ for %s: %s", known, exc)
             continue
         log.info("found %s (%s)", device.name, device.address)
         try:
@@ -317,6 +362,12 @@ async def hill_test(link: Link):
 async def main(args):
     link = Link(args.game_port)
     loop = asyncio.get_running_loop()
+    # Docker stops the bridge with SIGTERM. The bridge is process 1 in its
+    # container, which the kernel sends no signal it has no handler for, so
+    # without this it was killed 10 s later instead, leaving the bike
+    # connected to the computer's Bluetooth with nothing using it (and not
+    # advertising, so not found again). Ending cleanly disconnects it.
+    loop.add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)
     transport, _ = await loop.create_datagram_endpoint(
         lambda: link, local_addr=("127.0.0.1", args.bridge_port))
     state = {"state": "searching", "bike": None, "simulation": False,
@@ -329,6 +380,7 @@ async def main(args):
         else:
             await run_bike(link, state, args.name)
     finally:
+        loop.remove_signal_handler(signal.SIGTERM)
         beat.cancel()
         if hills:
             hills.cancel()
@@ -362,5 +414,5 @@ if __name__ == "__main__":
         log.setLevel(logging.DEBUG)  # ours only; bleak's debug is a flood
     try:
         asyncio.run(main(args))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass

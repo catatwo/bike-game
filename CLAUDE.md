@@ -168,6 +168,16 @@ another computer running this bridge, keeps the bridge from finding it.
   answers is treated as agreeing (as before). The game shows "asking it to
   take control" until it does. The tests in `test_bridge.py` fail on the
   old one-shot code.
+- 🔴 **The bridge must disconnect the bike when it stops.** It's process 1 in
+  its container, which the kernel sends no signal it has no handler for, so
+  `main()` handles SIGTERM (Docker's stop) by cancelling itself, and
+  `async with BleakClient` disconnects. Without that, Docker killed it 10 s
+  later and BlueZ kept the connection with nothing using it: the bike
+  doesn't advertise while connected, so no search found it again (bleak
+  searches even when given an address). As a backstop, when a search finds
+  nothing and a bike is remembered, `let_go_of()` asks BlueZ over D-Bus
+  whether it's still connected and disconnects it. `test_bridge.Stopping`
+  fails without the handler.
 - **The bridge keeps retrying when there's no Bluetooth adapter** (state
   `no_adapter`, shown in the game) instead of crash-looping on BlueZ's D-Bus
   timeout.
