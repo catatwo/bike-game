@@ -120,32 +120,27 @@ func _build_island() -> void:
 	_land_mat.set_shader_parameter("heights_size", Vector2(island.width, island.depth))
 	_land_mat.set_shader_parameter("heights_cell", Island.CELL)
 	_land_mat.set_shader_parameter("outside", Island.OUTSIDE)
-	# Each road from the rim of one place's plaza to the rim of the other's,
-	# so where roads meet there's a clean round plaza, not a pile of ends.
+	# Each road up to where it meets a place's plaza; across the plaza, a
+	# road from every road there to every other, on the curve the rider
+	# takes, so a junction looks like one, not a pile of ends.
 	for id in island.road_ids:
-		var road: Island.Road = island.roads[id]
-		var pts := road.points
-		var ends := [Island.PLACES[road.from]["at"], Island.PLACES[road.to]["at"]]
-		var rims := [island.plaza_radius(road.from), island.plaza_radius(road.to)]
-		var first := 0
-		while first < pts.size() - 2 and Vector2(pts[first].x, pts[first].z).distance_to(ends[0]) < rims[0]:
-			first += 1
-		var last := pts.size() - 1
-		while last > first + 1 and Vector2(pts[last].x, pts[last].z).distance_to(ends[1]) < rims[1]:
-			last -= 1
-		var i := maxi(first - 1, 0)
-		while i < last:
-			var j := mini(i + ROAD_PIECE, mini(last + 1, pts.size() - 1))
+		var pts: PackedVector3Array = island.roads[id].points
+		var span := island.road_span(id)
+		var i := span[0]
+		while i < span[1]:
+			var j := mini(i + ROAD_PIECE, span[1])
 			var mi := _instance(_road_mesh(pts, i, j), _road_mat)
 			mi.visibility_range_end = FAR_SHOW
 			add_child(mi)
 			i = j
 	for id in Island.PLACES:
-		var place: Dictionary = Island.PLACES[id]
-		var at: Vector2 = place["at"]
-		var disc := _instance(_disc_mesh(island.plaza_radius(id), 48), _road_mat)
-		disc.position = Vector3(at.x, float(place["elev"]) + Route.SURFACE + 0.03, at.y)
-		add_child(disc)
+		var ways := island.plaza_ways(id)
+		for k in ways.size():
+			# Each a little above the one before, so where they overlap
+			# they don't flicker.
+			var mi := _instance(_plaza_way_mesh(ways[k], 0.015 * (k + 1)), _road_mat)
+			mi.visibility_range_end = FAR_SHOW
+			add_child(mi)
 	# Landmarks: a beacon on the summit and a tower at West Gate, whose
 	# lights can be seen from anywhere.
 	_landmark("summit", 70.0, Color("ff2bd6"), 26.0)
@@ -437,6 +432,24 @@ static func _array_mesh(verts: PackedVector3Array, uvs: PackedVector2Array,
 ## A stretch of road, points i0 to i1. UV.x runs across it, UV.y is metres
 ## along it (the dashes and the marks across).
 func _road_mesh(pts: PackedVector3Array, i0: int, i1: int) -> ArrayMesh:
+	var along := PackedFloat32Array()
+	for i in range(i0, i1 + 1):
+		along.append(i * Route.STEP)
+	return _ribbon(pts, i0, i1, along, 0.0)
+
+
+## A way across a plaza (Island.plaza_ways()), `lift` m above the road: all
+## but its first and last points, which only line its ends up with the roads.
+func _plaza_way_mesh(way: PackedVector3Array, lift: float) -> ArrayMesh:
+	var along := PackedFloat32Array([0.0])
+	for i in range(2, way.size() - 1):
+		along.append(along[i - 2] + Vector2(way[i].x - way[i - 1].x, way[i].z - way[i - 1].z).length())
+	return _ribbon(way, 1, way.size() - 2, along, lift)
+
+
+## Road through points i0 to i1, `along[i - i0]` m along at each.
+func _ribbon(pts: PackedVector3Array, i0: int, i1: int, along: PackedFloat32Array,
+		lift: float) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var idx := PackedInt32Array()
@@ -445,29 +458,14 @@ func _road_mesh(pts: PackedVector3Array, i0: int, i1: int) -> ArrayMesh:
 		var b := pts[mini(i + 1, pts.size() - 1)]
 		var d := Vector2(b.x - a.x, b.z - a.z).normalized()
 		var right := Vector3(-d.y, 0.0, d.x) * Route.ROAD_HALF
-		var c := pts[i] + Vector3(0.0, Route.SURFACE, 0.0)
+		var c := pts[i] + Vector3(0.0, Route.SURFACE + lift, 0.0)
 		verts.append(c - right)
 		verts.append(c + right)
-		uvs.append(Vector2(0.0, i * Route.STEP))
-		uvs.append(Vector2(1.0, i * Route.STEP))
+		uvs.append(Vector2(0.0, along[i - i0]))
+		uvs.append(Vector2(1.0, along[i - i0]))
 		if i > i0:
 			var k := (i - i0 - 1) * 2
 			idx.append_array([k, k + 2, k + 1, k + 1, k + 2, k + 3])
-	return _array_mesh(verts, uvs, idx)
-
-
-## A flat disc of radius r, facing up; UV.x is 0.5 in the middle and 0 or 1
-## at the rim, so the road shader draws its edge line round it.
-static func _disc_mesh(r: float, segments: int) -> ArrayMesh:
-	var verts := PackedVector3Array([Vector3.ZERO])
-	var uvs := PackedVector2Array([Vector2(0.5, 0.0)])
-	var idx := PackedInt32Array()
-	for k in segments + 1:
-		var a := TAU * k / segments
-		verts.append(Vector3(sin(a) * r, 0.0, cos(a) * r))
-		uvs.append(Vector2(0.0, 2.5))
-		if k > 0:
-			idx.append_array([0, k + 1, k])  # clockwise from above: Godot's front
 	return _array_mesh(verts, uvs, idx)
 
 

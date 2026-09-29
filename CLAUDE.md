@@ -86,14 +86,19 @@ another computer running this bridge, keeps the bridge from finding it.
   steps its bend at each point. `heading_at` is the curve's own direction.
   `test_riding_is_smooth` measures the sideways pull at 30 km/h; keep it.
 - 🔴 **Junctions are round plazas** (`Island.plaza_radius`, 12-24 m, big
-  enough that the roads have come apart by the rim). Roads are drawn only
-  from rim to rim (`World._build_island`), each plaza is a disc, and
-  `Island.path()` joins legs with a curve across the plaza (`_across`,
-  shaped like a circle's arc), then resamples the whole way 5 m apart
-  (a route's distance is its point index). A turn right back the way it came
+  enough that the roads have come apart by the rim). Each road is drawn only
+  out to where it meets a plaza (`join_radius`, 0.8 of it; `road_span`), and
+  across the plaza there's a road from every road there to every other
+  (`plaza_ways`), on exactly the curve `Island.path()` rides (`_across`,
+  shaped like a circle's arc). `path()` then resamples the whole way 5 m
+  apart (a route's distance is its point index), and the first leg starts
+  at the join, not in the plaza's middle. 🔴 **Never fill a plaza with a
+  disc again**: at 48 m across with nothing on it, the maintainer rode over
+  it as "a big block of black hole". The plaza ways are lifted 1.5 cm apart
+  so overlapping ones don't flicker. A turn right back the way it came
   is too tight for a plaza: route round it (Grand Tour, Quarry Walls and
   Mountain laps were changed for that). Meshes must wind clockwise seen
-  from the front, or Godot culls them (the plaza discs were invisible).
+  from the front, or Godot culls them.
 - 🔴 **Roaming lays out only the road ahead** (`Route.ROAM_AHEAD`, topped up
   by `keep_ahead()`, called every frame by the ride and the menu's
   backdrop), so a turn can be chosen: `next_turn()` / `choose_turn()` re-lay

@@ -28,7 +28,7 @@ A city of neon towers, rolling hills, a valley, a ridge, a quarry and a
 mountain, joined by roads that meet at round plazas. Every ride is a way
 round it, so the roads and landmarks become familiar.
 
-- **8 routes**, from a flat lap of the city (3.4 km, about 7 minutes) to the
+- **8 routes**, from a flat lap of the city (3.3 km, about 7 minutes) to the
   30 km Grand Tour and the switchbacks up the mountain. The list shows each
   route's height profile and how long it takes at your pace.
 - **7 free rides** with no finish line, beginner to advanced: laps of the

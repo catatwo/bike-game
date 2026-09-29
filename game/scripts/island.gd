@@ -24,6 +24,7 @@ const HILLS_FROM_EDGE := 500.0  # the hills die away over this far in from the e
 const HASH := 60.0  # m: cells of the lookup of road segments
 const PLAZA_MIN := 12.0  # m: the radius of the round plaza at every place...
 const PLAZA_MAX := 24.0  # ...bigger where roads leave close together
+const PLAZA_JOIN := 0.8  # roads end, and the ways across a plaza begin, this far out (of its radius)
 const BAKED := "res://world/island.bin"
 const FILE_TAG := "BIKEISL1"
 
@@ -358,9 +359,11 @@ func leg_end(leg: String) -> String:
 
 ## The roads of `legs` end to end: {"points", "legs": [{"s", "turn_s", "leg",
 ## "road", "area"}], "end"}; "s" is where the leg's own road begins, "turn_s"
-## where the curve across the plaza before it does. Each leg must start where the one before ended. Where
-## one road hands over to the next, the way curves across the place's plaza
-## rather than turning on a point.
+## where the curve across the plaza before it does. Each leg must start where
+## the one before ended. Where one road hands over to the next, the way
+## curves across the place's plaza rather than turning on a point, along one
+## of its plaza_ways(); the first leg starts where its road meets the plaza,
+## not in the middle of it.
 func path(legs: Array) -> Dictionary:
 	var pts := PackedVector3Array()
 	var starts := []  # the index where each leg's own road begins
@@ -376,17 +379,17 @@ func path(legs: Array) -> Dictionary:
 		if leg.begins_with("-"):
 			rp = rp.duplicate()
 			rp.reverse()
+		var centre: Vector2 = PLACES[leg_start(leg)]["at"]
+		var rim := join_radius(leg_start(leg))
 		var first := 0
+		while first < rp.size() - 2 and Vector2(rp[first].x, rp[first].z).distance_to(centre) < rim:
+			first += 1
 		curves.append(0)
 		if n > 0:
-			# Leave the last road at the plaza's rim, curve across, and join
-			# this one at the rim on its side.
-			var centre: Vector2 = PLACES[at]["at"]
-			var rim := plaza_radius(at) * 0.8
+			# Leave the last road where it meets the plaza, curve across, and
+			# join this one where it does.
 			while pts.size() > 2 and Vector2(pts[pts.size() - 1].x, pts[pts.size() - 1].z).distance_to(centre) < rim:
 				pts.remove_at(pts.size() - 1)
-			while first < rp.size() - 2 and Vector2(rp[first].x, rp[first].z).distance_to(centre) < rim:
-				first += 1
 			curves[n] = pts.size() - 1
 			pts.append_array(_across(pts[pts.size() - 1], pts[pts.size() - 2], rp[first], rp[first + 1]))
 		starts.append(pts.size())
@@ -467,6 +470,49 @@ func plaza_radius(place: String) -> float:
 	var r := clampf((ROAD_HALF + 0.5) / sin(maxf(closest, 0.05) * 0.5) + 3.0, PLAZA_MIN, PLAZA_MAX)
 	_plazas[place] = r
 	return r
+
+
+## How far from a place its roads end and the ways across its plaza begin.
+func join_radius(place: String) -> float:
+	return plaza_radius(place) * PLAZA_JOIN
+
+
+## The part of a road outside the plazas at its ends: [first, last] point.
+func road_span(id: String) -> Array[int]:
+	var r: Road = roads[id]
+	var pts := r.points
+	var first := 0
+	var c0: Vector2 = PLACES[r.from]["at"]
+	var c1: Vector2 = PLACES[r.to]["at"]
+	while first < pts.size() - 2 and Vector2(pts[first].x, pts[first].z).distance_to(c0) < join_radius(r.from):
+		first += 1
+	var last := pts.size() - 1
+	while last > first + 1 and Vector2(pts[last].x, pts[last].z).distance_to(c1) < join_radius(r.to):
+		last -= 1
+	return [first, last]
+
+
+## The ways across a place's plaza, from every road there to every other,
+## on the same curves the rider takes (path()). Each has the road's point
+## beyond either end as well, to line its ends up with the roads'.
+func plaza_ways(place: String) -> Array[PackedVector3Array]:
+	var arms := []  # [where a road meets the plaza, its next point out]
+	for id in road_ids:
+		var r: Road = roads[id]
+		var span := road_span(id)
+		if r.from == place:
+			arms.append([r.points[span[0]], r.points[span[0] + 1]])
+		if r.to == place:
+			arms.append([r.points[span[1]], r.points[span[1] - 1]])
+	var out: Array[PackedVector3Array] = []
+	for i in arms.size():
+		for j in range(i + 1, arms.size()):
+			var way := PackedVector3Array([arms[i][1], arms[i][0]])
+			way.append_array(_across(arms[i][0], arms[i][1], arms[j][0], arms[j][1]))
+			way.append(arms[j][0])
+			way.append(arms[j][1])
+			out.append(way)
+	return out
 
 
 ## A segment's start and end on the island.
