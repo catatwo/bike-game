@@ -21,15 +21,17 @@ class FakeClient:
 
     refuse: opcode -> how many times to refuse it, and with what result
     (like a bike that refuses control until it's started). silent: never
-    answers at all, like some bikes."""
+    answers at all, like some bikes. echo_start: reports "started" before
+    answering a start, as the Domyos does."""
 
-    def __init__(self, target_features, refuse=None, silent=False):
+    def __init__(self, target_features, refuse=None, silent=False, echo_start=False):
         self.feature = struct.pack("<II", 0x4000, target_features)
         self.is_connected = True
         self.handlers = {}
         self.writes = []
         self.refuse = dict(refuse or {})
         self.silent = silent
+        self.echo_start = echo_start
 
     async def read_gatt_char(self, uuid):
         assert uuid == ftms.FEATURE
@@ -49,6 +51,8 @@ class FakeClient:
         if times > 0:
             self.refuse[data[0]] = (times - 1, code)
             result = code
+        if self.echo_start and data[0] == ftms.OP_START_OR_RESUME and result == 0x01:
+            self.status(ftms.STATUS_STARTED_BY_USER)
         self.handlers[uuid](None, bytearray([0x80, data[0], result]))
 
     def notify(self, hexdata):
@@ -165,6 +169,16 @@ class Ride(unittest.IsolatedAsyncioTestCase):
         await until(lambda: len(self.client.writes) == 1)
         self.client.status(ftms.STATUS_STARTED_BY_USER)
         await until(lambda: self.state.get("controlled"), timeout=1.0)
+
+    async def test_the_bikes_report_of_our_own_start_is_not_play_pressed(self):
+        # The Domyos reports "started" before it answers our start: that's
+        # our start, not play pressed, so control isn't asked for twice.
+        await self.start(1 << 13, echo_start=True)
+        self.link.datagram_received(b'{"grade": 2}', None)
+        await until(lambda: self.client.writes[-1:] == [ftms.set_simulation(2)])
+        await asyncio.sleep(0.1)
+        self.assertEqual(self.client.writes, [ftms.request_control(),
+                                              ftms.start_or_resume(), ftms.set_simulation(2)])
 
     async def test_a_refused_command_retakes_control(self):
         await self.start(1 << 3)

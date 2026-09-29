@@ -111,6 +111,7 @@ async def ride(client, link: Link, state: dict):
     reading = {"power": None, "cadence": None, "speed": None}
     answers: dict[int, asyncio.Future] = {}
     lost = asyncio.Event()  # the bike needs taking control of again
+    asking = False  # a request for control or to start is on its way
 
     def on_data(_, data):
         try:
@@ -148,8 +149,11 @@ async def ride(client, link: Link, state: dict):
                     ftms.STATUS_STOPPED_BY_SAFETY_KEY, ftms.STATUS_CONTROL_LOST):
             state["controlled"] = False
             lost.set()
-        elif code == ftms.STATUS_STARTED_BY_USER and not state["controlled"]:
-            lost.set()  # play was pressed: ask again now
+        elif (code == ftms.STATUS_STARTED_BY_USER and not state["controlled"]
+                and not asking):
+            # Play was pressed while it was refusing: ask again now. (While
+            # asking, it's the bike reporting our own start.)
+            lost.set()
 
     last_training = [""]
 
@@ -177,14 +181,19 @@ async def ride(client, link: Link, state: dict):
     async def take_control():
         """Asks for control, then to start, until the bike agrees (or doesn't
         answer at all, which some bikes don't: then carry on as if it did)."""
+        nonlocal asking
         told = ""
         while client.is_connected:
             lost.clear()
-            got = await command(ftms.request_control())
-            log.info("asked the bike for control: %s", got)
-            if got in ("success", "no answer"):
-                got = await command(ftms.start_or_resume())
-                log.info("asked the bike to start: %s", got)
+            asking = True
+            try:
+                got = await command(ftms.request_control())
+                log.info("asked the bike for control: %s", got)
+                if got in ("success", "no answer"):
+                    got = await command(ftms.start_or_resume())
+                    log.info("asked the bike to start: %s", got)
+            finally:
+                asking = False
             if got in ("success", "no answer"):
                 state["controlled"] = True
                 log.info("bike accepted control%s", "" if got == "success" else " (it doesn't answer)")

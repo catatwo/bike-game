@@ -167,7 +167,9 @@ another computer running this bridge, keeps the bridge from finding it.
   took commands after someone pressed play on it. A bike that never
   answers is treated as agreeing (as before). The game shows "asking it to
   take control" until it does. The tests in `test_bridge.py` fail on the
-  old one-shot code.
+  old one-shot code. The Domyos reports "started by the user" (status 0x04)
+  in reply to our own start, before answering it, so that report counts as
+  play pressed only while the bridge isn't itself asking.
 - 🔴 **The bridge must disconnect the bike when it stops.** It's process 1 in
   its container, which the kernel sends no signal it has no handler for, so
   `main()` handles SIGTERM (Docker's stop) by cancelling itself, and
