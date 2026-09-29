@@ -5,6 +5,14 @@ for a Decathlon Domyos Challenge Bike (2023). README.md has the overview, the
 keys, how to run it and troubleshooting. This file is what a future session
 needs to not break it.
 
+## Public repo
+
+Published at https://github.com/catatwo/bike-game under the MIT licence
+(2026-09-29). Everything committed is public: no names, emails, addresses,
+host names or machine details, in files or in commit messages. Commits go
+under the `catatwo` GitHub no-reply address (set in this clone's git
+config). The history was started afresh when it went public.
+
 ## Goals that must stay true
 
 - **Turn on the bike and the screen, and ride.** No phone apps, no fiddling.
