@@ -25,7 +25,7 @@ computer by the bike that boots straight into the game.
 ### An island to ride
 
 A city of neon towers, rolling hills, a valley, a ridge, a quarry and a
-mountain, joined by roads that meet at round plazas. Every ride is a way
+mountain, joined by roads that meet at roundabouts. Every ride is a way
 round it, so the roads and landmarks become familiar.
 
 - **8 routes**, from a flat lap of the city (3.3 km, about 7 minutes) to the
@@ -37,7 +37,7 @@ round it, so the roads and landmarks become familiar.
   and Left/Right pick another. Leave it alone and a road is chosen for you.
   Just pedalling in the menu for a few seconds starts a free ride.
 - **A racing-game map** beside the height profile: zoomed in round you and
-  turning with you, showing your route, the plazas, the finish and the
+  turning with you, showing your route, the roundabouts, the finish and the
   ghost.
 
 ### Training
@@ -222,7 +222,7 @@ per rider in `data/bike-game/riders/`.
     built (`tools/bake_island.gd`, a few seconds) and drawn in tiles round the
     camera.
   - A route (`route.gd`) is a list of roads ridden one after another, joined
-    across the plazas; `ride.gd` is a ride's logic, with no drawing, so it can
+    round the roundabouts; `ride.gd` is a ride's logic, with no drawing, so it can
     be tested; `rider_physics.gd` turns watts into speed.
   - Routes, workouts and colours are in `catalog.gd`; XP and levels in
     `levels.gd`; the screens in `main.gd`, `menu.gd`, `hud.gd`, `world.gd`

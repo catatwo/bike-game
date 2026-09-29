@@ -84,28 +84,40 @@ another computer running this bridge, keeps the bridge from finding it.
   pieces jolted the rider sideways at every point on a bend (the maintainer saw
   "shakes/wobbles"), and a curve *through* the points (Catmull-Rom) still
   steps its bend at each point. `heading_at` is the curve's own direction.
-  `test_riding_is_smooth` measures the sideways pull at 30 km/h; keep it.
-- 🔴 **Junctions are round plazas** (`Island.plaza_radius`, 12-24 m, big
-  enough that the roads have come apart by the rim). Each road is drawn only
-  out to where it meets a plaza (`join_radius`, 0.8 of it; `road_span`), and
-  across the plaza there's a road from every road there to every other
-  (`plaza_ways`), on exactly the curve `Island.path()` rides (`_across`,
-  shaped like a circle's arc). `path()` then resamples the whole way 5 m
-  apart (a route's distance is its point index), and the first leg starts
-  at the join, not in the plaza's middle. 🔴 **Never fill a plaza with a
-  disc again**: at 48 m across with nothing on it, the maintainer rode over
-  it as "a big block of black hole". The plaza ways are lifted 1.5 cm apart
-  so overlapping ones don't flicker. A turn right back the way it came
-  is too tight for a plaza: route round it (Grand Tour, Quarry Walls and
-  Mountain laps were changed for that). Meshes must wind clockwise seen
-  from the front, or Godot culls them.
+  `test_riding_is_smooth` measures the sideways pull at 30 km/h along every
+  route and free ride, and how fast it changes; keep it. (It was only
+  written on 2026-09-29, though this file had named it before. Its first
+  run on the plaza version found a 218 m/s² kink where a dead end on "Easy
+  roaming" turned the way back on itself.)
+- 🔴 **Every place is a roundabout** (`Island.roundabout()`), clockwise as in
+  the UK (`CLOCKWISE`), the maintainer's idea after two plaza versions: a
+  disc (ridden over as "a big block of black hole") and then a curve from
+  every road to every other (a web of crossing lines). Each road stops
+  where its curve on to the ring starts (`start`; `road_span`); the curves
+  on and off are circle arcs of `RING_TURN` that touch both road and ring
+  (`ramp_on`/`ramp_off`), so the ring is only as big as leaves `RING_GAP`
+  between one road's curves and the next's (14-22 m, found per place).
+  `Island.path()` rides on, round and off (`way_round`), then resamples the
+  whole way 5 m apart (a route's distance is its point index); the first
+  leg starts where its road leaves the roundabout. Turning back is once
+  round, so dead ends need no special routes any more. The world draws it
+  in three layers 1 cm apart (ring with a dashed middle, plain surface for
+  the ways on and off, then the glowing edges only along the real
+  outline), so nothing flickers and no edge line crosses a road's mouth.
+  🔴 **Roads that meet a place need about 50° between them** or the ring
+  grows to `RING_MAX`; some roads have a via point ~200 m out only to
+  spread them (`test_roundabouts_leave_room_between_roads`). A loop road
+  isn't smooth through its place; it's two ends at a roundabout, and the
+  City Loop runs anticlockwise so a lap turns left there, not most of the
+  way round. Meshes must wind clockwise seen from the front, or Godot culls
+  them.
 - 🔴 **Roaming lays out only the road ahead** (`Route.ROAM_AHEAD`, topped up
   by `keep_ahead()`, called every frame by the ride and the menu's
   backdrop), so a turn can be chosen: `next_turn()` / `choose_turn()` re-lay
   the way beyond the next place only. That's safe because `Island.path()`
   samples exactly every `STEP` m from the start (never stretched to fit),
   so identical legs give identical points; and a turn closes `TURN_CLOSES`
-  m before the curve across the plaza (`legs[j].turn_s`), which already
+  m before the way round the roundabout (`legs[j].turn_s`), which already
   depends on the choice. `test_choosing_a_turn_keeps_the_road_ridden`.
   The world drops its gates when `route.changes` moves.
 - **Segments** (`Island.SEGMENTS`, a stretch of one road one way) are found

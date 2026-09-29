@@ -2,7 +2,7 @@ class_name MiniMap
 extends Control
 ## A racing-game map: zoomed in round you, turning with you so the way you
 ## ride is always up. Every road, the way being ridden in cyan (faint where
-## it's been ridden), the plazas, the finish, the ghost (held at the edge
+## it's been ridden), the roundabouts, the finish, the ghost (held at the edge
 ## when it's off the map), place names kept upright, and which way is north.
 
 const SPAN := 700.0  # m of the island from the map's top edge to its bottom
@@ -99,7 +99,7 @@ func _draw() -> void:
 	for id in Island.PLACES:
 		var c: Vector2 = Island.PLACES[id]["at"]
 		if c.distance_squared_to(me) < view * 4.0:
-			draw_circle(c, maxf(isl.plaza_radius(id), 5.0 * px), Color(ROAD, 0.55))
+			draw_circle(c, maxf(isl.roundabout_radius(id), 5.0 * px), Color(ROAD, 0.55))
 	var n := int(position_m / EVERY)
 	if not route.endless:
 		var done := _route_pts.slice(0, clampi(n + 1, 1, _route_pts.size()))

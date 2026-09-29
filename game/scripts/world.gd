@@ -13,6 +13,7 @@ const TILE := 512.0
 const TILE_QUADS := 64  # 8 m apart: the baked heights' spacing
 const TILES_AROUND := [2, 3, 3]  # tiles each way from the camera's, by graphics quality
 const ROAD_PIECE := 80  # road points per road mesh
+const LINE_HALF := 0.1  # m: half the width of a roundabout's glowing edges
 const GATE_CHUNK := 400.0
 const GATES_AHEAD := 6
 const SCENERY_GRID := 40.0  # m between spots where scenery might stand
@@ -120,9 +121,8 @@ func _build_island() -> void:
 	_land_mat.set_shader_parameter("heights_size", Vector2(island.width, island.depth))
 	_land_mat.set_shader_parameter("heights_cell", Island.CELL)
 	_land_mat.set_shader_parameter("outside", Island.OUTSIDE)
-	# Each road up to where it meets a place's plaza; across the plaza, a
-	# road from every road there to every other, on the curve the rider
-	# takes, so a junction looks like one, not a pile of ends.
+	# Each road up to where its way on to a roundabout begins, then the
+	# roundabouts.
 	for id in island.road_ids:
 		var pts: PackedVector3Array = island.roads[id].points
 		var span := island.road_span(id)
@@ -134,11 +134,8 @@ func _build_island() -> void:
 			add_child(mi)
 			i = j
 	for id in Island.PLACES:
-		var ways := island.plaza_ways(id)
-		for k in ways.size():
-			# Each a little above the one before, so where they overlap
-			# they don't flicker.
-			var mi := _instance(_plaza_way_mesh(ways[k], 0.015 * (k + 1)), _road_mat)
+		for mesh in _roundabout_meshes(id):
+			var mi := _instance(mesh, _road_mat)
 			mi.visibility_range_end = FAR_SHOW
 			add_child(mi)
 	# Landmarks: a beacon on the summit and a tower at West Gate, whose
@@ -438,18 +435,124 @@ func _road_mesh(pts: PackedVector3Array, i0: int, i1: int) -> ArrayMesh:
 	return _ribbon(pts, i0, i1, along, 0.0)
 
 
-## A way across a plaza (Island.plaza_ways()), `lift` m above the road: all
-## but its first and last points, which only line its ends up with the roads.
-func _plaza_way_mesh(way: PackedVector3Array, lift: float) -> ArrayMesh:
-	var along := PackedFloat32Array([0.0])
-	for i in range(2, way.size() - 1):
-		along.append(along[i - 2] + Vector2(way[i].x - way[i - 1].x, way[i].z - way[i - 1].z).length())
-	return _ribbon(way, 1, way.size() - 2, along, lift)
+## A place's roundabout, in three layers so none flickers over another: the
+## ring, with a dashed line round its middle and marks across; each road's
+## ways on and off, and the road on in to the ring, as plain surface over
+## it; and glowing edges only where the roundabout really ends (round the
+## island, along the outside of each way on and off, and round the outside
+## between one road's and the next's).
+func _roundabout_meshes(place: String) -> Array[ArrayMesh]:
+	var rb := island.roundabout(place)
+	var way := 1.0 if Island.CLOCKWISE else -1.0
+	var shift: float = rb["shift"]
+	var ring: float = rb["ring"]
+	var out: Array[ArrayMesh] = []
+	# The ring. UV.x 0.1 to 0.9 keeps the road's own edges off it: they'd
+	# cross the mouth of every road.
+	var circle := island.ring_arc(place, 0.0, 0.0)
+	var along := PackedFloat32Array()
+	for k in circle.size():
+		along.append(TAU * ring * k / (circle.size() - 1))
+	out.append(_ribbon(_closed(circle), 1, circle.size(), along, 0.01, Route.ROAD_HALF, 0.1, 0.9))
+	# Plain surface, and the edges along the outside of each way on and off.
+	var arms: Array = rb["arms"]
+	for arm in arms:
+		var road: PackedVector3Array = island.roads[arm["road"]].points
+		var inward := -1 if arm["end"] == "from" else 1
+		var stub := PackedVector3Array([road[arm["index"] - inward]])
+		var i: int = arm["index"]
+		while i >= 0 and i < road.size() and Vector2(road[i].x, road[i].z).distance_to(rb["centre"]) > ring:
+			stub.append(road[i])
+			i += inward
+		stub.append(road[clampi(i, 0, road.size() - 1)])
+		out.append(_plain(stub, 0.02))
+		for ramp in [island.ramp_on(place, arm), island.ramp_off(place, arm)]:
+			var ends := _extended(ramp)
+			out.append(_plain(ends, 0.02))
+			out.append(_line(_kerb(ends, rb["centre"]), 0.03))
+	# Round the outside between one road's ways and the next's, and round
+	# the island.
+	for k in arms.size():
+		var next: Dictionary = arms[(k + 1) % arms.size()]
+		var arc := island.ring_arc(place, arms[k]["angle"] + way * shift, next["angle"] - way * shift)
+		out.append(_line(_extended(_widened(arc, rb, Route.ROAD_HALF - LINE_HALF)), 0.03))
+	out.append(_line(_closed(_widened(circle, rb, -Route.ROAD_HALF + LINE_HALF)), 0.03))
+	return out
 
 
-## Road through points i0 to i1, `along[i - i0]` m along at each.
+## A closed loop (first point == last) with the points either side of the
+## join added at the ends, so it's drawn from 1 to size - 2 without a seam.
+static func _closed(loop: PackedVector3Array) -> PackedVector3Array:
+	var out := PackedVector3Array([loop[loop.size() - 2]])
+	out.append_array(loop)
+	out.append(loop[1])
+	return out
+
+
+## Points with one added beyond each end, straight on, so all of them are
+## drawn (from 1 to size - 2) and the ends line up with what they meet.
+static func _extended(ramp: PackedVector3Array) -> PackedVector3Array:
+	var n := ramp.size()
+	var out := PackedVector3Array([ramp[0] * 2.0 - ramp[1]])
+	out.append_array(ramp)
+	out.append(ramp[n - 1] * 2.0 - ramp[n - 2])
+	return out
+
+
+## Points on a roundabout's ring moved `by` m outwards (inwards if negative).
+static func _widened(arc: PackedVector3Array, rb: Dictionary, by: float) -> PackedVector3Array:
+	var c: Vector2 = rb["centre"]
+	var out := PackedVector3Array()
+	for p in arc:
+		var d := (Vector2(p.x, p.z) - c).normalized() * by
+		out.append(p + Vector3(d.x, 0.0, d.y))
+	return out
+
+
+## The outside edge of a way on or off (as _extended()): the side away from
+## the roundabout where it meets the ring.
+static func _kerb(ramp: PackedVector3Array, centre: Vector2) -> PackedVector3Array:
+	var n := ramp.size()
+	var sides := PackedVector3Array()
+	for i in n:
+		var a := ramp[maxi(i - 1, 0)]
+		var b := ramp[mini(i + 1, n - 1)]
+		var d := Vector2(b.x - a.x, b.z - a.z).normalized()
+		sides.append(Vector3(-d.y, 0.0, d.x))
+	# Where it meets the ring: its point nearer the centre, of its two ends.
+	var ring_end := 1 if Vector2(ramp[1].x, ramp[1].z).distance_to(centre) \
+			< Vector2(ramp[n - 2].x, ramp[n - 2].z).distance_to(centre) else n - 2
+	var away := Vector2(ramp[ring_end].x, ramp[ring_end].z) - centre
+	var sign := signf(Vector2(sides[ring_end].x, sides[ring_end].z).dot(away))
+	var out := PackedVector3Array()
+	for i in n:
+		out.append(ramp[i] + sides[i] * sign * (Route.ROAD_HALF - LINE_HALF))
+	return out
+
+
+## Plain road surface along points (drawn from 1 to size - 2): no edges, no
+## marks.
+func _plain(pts: PackedVector3Array, lift: float) -> ArrayMesh:
+	var along := PackedFloat32Array()
+	along.resize(pts.size() - 2)
+	along.fill(1.0)
+	return _ribbon(pts, 1, pts.size() - 2, along, lift, Route.ROAD_HALF, 0.25, 0.25)
+
+
+## A glowing edge line along points (drawn from 1 to size - 2).
+func _line(pts: PackedVector3Array, lift: float) -> ArrayMesh:
+	var along := PackedFloat32Array()
+	along.resize(pts.size() - 2)
+	along.fill(1.0)
+	return _ribbon(pts, 1, pts.size() - 2, along, lift, LINE_HALF, 0.0, 0.0)
+
+
+## Road through points i0 to i1, `half` m either side, `lift` m above the
+## road's surface, `along[i - i0]` m along at each; UV.x from u0 on one side
+## to u1 on the other (the road shader draws edges at 0 and 1, and the
+## dashed middle line at 0.5).
 func _ribbon(pts: PackedVector3Array, i0: int, i1: int, along: PackedFloat32Array,
-		lift: float) -> ArrayMesh:
+		lift: float, half := Route.ROAD_HALF, u0 := 0.0, u1 := 1.0) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var uvs := PackedVector2Array()
 	var idx := PackedInt32Array()
@@ -457,12 +560,12 @@ func _ribbon(pts: PackedVector3Array, i0: int, i1: int, along: PackedFloat32Arra
 		var a := pts[maxi(i - 1, 0)]
 		var b := pts[mini(i + 1, pts.size() - 1)]
 		var d := Vector2(b.x - a.x, b.z - a.z).normalized()
-		var right := Vector3(-d.y, 0.0, d.x) * Route.ROAD_HALF
+		var right := Vector3(-d.y, 0.0, d.x) * half
 		var c := pts[i] + Vector3(0.0, Route.SURFACE + lift, 0.0)
 		verts.append(c - right)
 		verts.append(c + right)
-		uvs.append(Vector2(0.0, along[i - i0]))
-		uvs.append(Vector2(1.0, along[i - i0]))
+		uvs.append(Vector2(u0, along[i - i0]))
+		uvs.append(Vector2(u1, along[i - i0]))
 		if i > i0:
 			var k := (i - i0 - 1) * 2
 			idx.append_array([k, k + 2, k + 1, k + 1, k + 2, k + 3])

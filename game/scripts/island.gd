@@ -22,9 +22,13 @@ const MARGIN := 1600.0  # land beyond the outermost roads, inside the baked area
 const OUTSIDE := 40.0  # the land's height at the baked area's edge, and beyond it
 const HILLS_FROM_EDGE := 500.0  # the hills die away over this far in from the edge
 const HASH := 60.0  # m: cells of the lookup of road segments
-const PLAZA_MIN := 12.0  # m: the radius of the round plaza at every place...
-const PLAZA_MAX := 24.0  # ...bigger where roads leave close together
-const PLAZA_JOIN := 0.8  # roads end, and the ways across a plaza begin, this far out (of its radius)
+const RING_MIN := 14.0  # m: the radius of the ring round every place's roundabout...
+const RING_MAX := 26.0  # ...bigger where roads meet it close together
+const RING_TURN := 10.0  # m: the radius of the curves on to a roundabout and off it
+const RING_GAP := 4.0  # m of the ring's outer edge left, at least, between one road's curves and the next's
+## Which way round the roundabouts go, seen from above: clockwise, as in
+## the UK.
+const CLOCKWISE := true
 const BAKED := "res://world/island.bin"
 const FILE_TAG := "BIKEISL1"
 
@@ -59,33 +63,33 @@ const PLACES := {
 ## steep stretch, counted from `from` to `to`.
 const ROADS := [
 	{"id": "city-loop", "name": "City Loop", "from": "city", "to": "city", "area": "city",
-		"via": [[600, -300], [1200, -200], [1300, 400], [600, 300]],
+		"via": [[600, 300], [1300, 400], [1200, -200], [600, -300]],
 		"roll": 0.004, "roll_scale": 500.0, "wiggle": 6.0},
 	{"id": "gate-road", "name": "Gate Road", "from": "city", "to": "west-gate", "area": "plains",
 		"via": [[-900, 350], [-1800, 350]], "roll": 0.006, "roll_scale": 700.0, "wiggle": 25.0},
 	{"id": "valley-road", "name": "Valley Road", "from": "city", "to": "valley-south", "area": "valley",
-		"via": [[-200, -1000], [300, -1900]], "roll": 0.012, "roll_scale": 900.0, "wiggle": 30.0},
+		"via": [[-130, -150], [-200, -1000], [300, -1900]], "roll": 0.012, "roll_scale": 900.0, "wiggle": 30.0},
 	{"id": "west-rim", "name": "West Rim", "from": "valley-south", "to": "valley-north", "area": "valley",
 		"via": [[-700, -3700], [-900, -4800], [-500, -5700]], "roll": 0.012, "roll_scale": 800.0,
 		"wiggle": 30.0},
 	{"id": "east-rim", "name": "East Rim", "from": "valley-north", "to": "valley-south", "area": "valley",
-		"via": [[1500, -5500], [1800, -4400], [1300, -3400]], "roll": 0.012, "roll_scale": 900.0,
+		"via": [[1500, -5500], [1800, -4400], [1300, -3400], [329, -3053]], "roll": 0.012, "roll_scale": 900.0,
 		"wiggle": 30.0},
 	{"id": "hill-road", "name": "Hill Road", "from": "city", "to": "hilltop", "area": "hills",
-		"via": [[300, -900], [1500, -1300], [2600, -1500]], "roll": 0.025, "roll_scale": 700.0,
+		"via": [[35, -197], [300, -900], [1500, -1300], [2600, -1500]], "roll": 0.025, "roll_scale": 700.0,
 		"wiggle": 30.0},
 	{"id": "ridge", "name": "The Ridge", "from": "hilltop", "to": "east-point", "area": "ridge",
 		"via": [[4700, -1700], [5500, -900]], "roll": 0.035, "roll_scale": 550.0, "wiggle": 25.0,
 		"walls": [[0.5, 700.0, -0.06]]},
 	{"id": "east-road", "name": "East Road", "from": "east-point", "to": "foot", "area": "plains",
-		"via": [[5600, 1900], [4000, 2700]], "roll": 0.02, "roll_scale": 900.0, "wiggle": 35.0},
+		"via": [[6371, 453], [5600, 1900], [4000, 2700]], "roll": 0.02, "roll_scale": 900.0, "wiggle": 35.0},
 	{"id": "south-road", "name": "South Road", "from": "city", "to": "foot", "area": "mountain",
-		"via": [[-100, 1300], [1200, 2400]], "roll": 0.012, "roll_scale": 900.0, "wiggle": 30.0},
+		"via": [[-100, 1300], [1200, 2400], [2136, 2785]], "roll": 0.012, "roll_scale": 900.0, "wiggle": 30.0},
 	{"id": "summit-road", "name": "Summit Road", "from": "foot", "to": "summit", "area": "mountain",
-		"via": [[2000, 3700], [2900, 3900], [2500, 4500], [3500, 4700], [3200, 5300]],
+		"via": [[2265, 3097], [2000, 3700], [2900, 3900], [2500, 4500], [3500, 4700], [3200, 5300]],
 		"roll": 0.006, "roll_scale": 600.0, "wiggle": 0.0},
 	{"id": "summit-east", "name": "The Long Descent", "from": "summit", "to": "east-point",
-		"area": "mountain", "via": [[5300, 5100], [6300, 4000], [6800, 2200]], "roll": 0.008,
+		"area": "mountain", "via": [[5300, 5100], [6300, 4000], [6800, 2200], [6584, 481]], "roll": 0.008,
 		"roll_scale": 700.0, "wiggle": 20.0},
 	{"id": "west-road", "name": "West Road", "from": "west-gate", "to": "quarry", "area": "plains",
 		"via": [[-3300, 1700], [-3000, 3100]], "roll": 0.01, "roll_scale": 800.0, "wiggle": 30.0,
@@ -94,7 +98,7 @@ const ROADS := [
 		"via": [[-1200, 4400], [100, 4000], [1300, 3300]], "roll": 0.012, "roll_scale": 800.0,
 		"wiggle": 25.0, "walls": [[0.3, 850.0, 0.075]]},
 	{"id": "valley-hill", "name": "Valley Hill", "from": "hilltop", "to": "valley-south", "area": "hills",
-		"via": [[2600, -2600], [1300, -2900]], "roll": 0.02, "roll_scale": 700.0, "wiggle": 30.0},
+		"via": [[2600, -2600], [1300, -2900], [388, -2832]], "roll": 0.02, "roll_scale": 700.0, "wiggle": 30.0},
 ]
 
 ## Timed stretches, each on one road in its own direction, from `from` to
@@ -132,7 +136,7 @@ var origin := Vector2.ZERO
 var width := 0
 var depth := 0
 var _hash := {}  # Vector2i -> [[road id, segment index], ...]
-var _plazas := {}  # place id -> radius, m
+var _roundabouts := {}  # place id -> roundabout()
 
 static var _main: Island
 
@@ -178,7 +182,7 @@ func _make_road(spec: Dictionary) -> Road:
 	ctrl.append(PLACES[r.to]["at"])
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(r.id)
-	var line := _spline(ctrl, r.from == r.to)
+	var line := _spline(ctrl)
 	line = _wiggle(line, float(spec.get("wiggle", 20.0)), rng)
 	line = _resample(line)
 	var elev := _elevations(line.size(), spec, PLACES[r.from]["elev"], PLACES[r.to]["elev"], rng)
@@ -189,28 +193,20 @@ func _make_road(spec: Dictionary) -> Road:
 
 
 ## A smooth line through the points (centripetal Catmull-Rom), about a
-## metre between samples. A loop comes back to where it started.
-static func _spline(ctrl: Array[Vector2], closed: bool) -> PackedVector2Array:
-	var pts := ctrl.duplicate()
-	if closed:
-		pts.pop_back()
+## metre between samples. A road that comes back to its own place isn't
+## smooth through it: a roundabout joins its two ends.
+static func _spline(pts: Array[Vector2]) -> PackedVector2Array:
 	var n := pts.size()
 	var out := PackedVector2Array()
-	for i in (n if closed else n - 1):
+	for i in n - 1:
 		var p1: Vector2 = pts[i]
-		var p2: Vector2 = pts[(i + 1) % n]
-		var p0: Vector2
-		var p3: Vector2
-		if closed:
-			p0 = pts[(i - 1 + n) % n]
-			p3 = pts[(i + 2) % n]
-		else:
-			p0 = pts[i - 1] if i > 0 else 2.0 * p1 - p2
-			p3 = pts[i + 2] if i + 2 < n else 2.0 * p2 - p1
+		var p2: Vector2 = pts[i + 1]
+		var p0: Vector2 = pts[i - 1] if i > 0 else 2.0 * p1 - p2
+		var p3: Vector2 = pts[i + 2] if i + 2 < n else 2.0 * p2 - p1
 		var steps := maxi(4, int(p1.distance_to(p2)))
 		for k in steps:
 			out.append(_catmull(p0, p1, p2, p3, float(k) / steps))
-	out.append(pts[0] if closed else pts[n - 1])
+	out.append(pts[n - 1])
 	return out
 
 
@@ -359,15 +355,14 @@ func leg_end(leg: String) -> String:
 
 ## The roads of `legs` end to end: {"points", "legs": [{"s", "turn_s", "leg",
 ## "road", "area"}], "end"}; "s" is where the leg's own road begins, "turn_s"
-## where the curve across the plaza before it does. Each leg must start where
-## the one before ended. Where one road hands over to the next, the way
-## curves across the place's plaza rather than turning on a point, along one
-## of its plaza_ways(); the first leg starts where its road meets the plaza,
-## not in the middle of it.
+## where the way round the roundabout before it does. Each leg must start
+## where the one before ended. Where one road hands over to the next, the way
+## goes round the place's roundabout (way_round()); the first leg starts
+## where its road leaves the roundabout, not in the middle of it.
 func path(legs: Array) -> Dictionary:
 	var pts := PackedVector3Array()
 	var starts := []  # the index where each leg's own road begins
-	var curves := []  # ...and where the curve across the plaza before it begins
+	var curves := []  # ...and where the way round the roundabout before it begins
 	var out := []
 	var at := ""
 	for n in legs.size():
@@ -379,19 +374,22 @@ func path(legs: Array) -> Dictionary:
 		if leg.begins_with("-"):
 			rp = rp.duplicate()
 			rp.reverse()
-		var centre: Vector2 = PLACES[leg_start(leg)]["at"]
-		var rim := join_radius(leg_start(leg))
-		var first := 0
-		while first < rp.size() - 2 and Vector2(rp[first].x, rp[first].z).distance_to(centre) < rim:
-			first += 1
+		var place := leg_start(leg)
+		var leave := _arm(place, leg, false)
+		var first: int = leave["index"]
+		if leg.begins_with("-"):
+			first = rp.size() - 1 - first
 		curves.append(0)
 		if n > 0:
-			# Leave the last road where it meets the plaza, curve across, and
-			# join this one where it does.
-			while pts.size() > 2 and Vector2(pts[pts.size() - 1].x, pts[pts.size() - 1].z).distance_to(centre) < rim:
-				pts.remove_at(pts.size() - 1)
+			# Leave the last road where its way on to the roundabout begins,
+			# go round, and join this one where the way off ends.
+			var came: String = legs[n - 1]
+			var arrive := _arm(place, came, true)
+			var cut: int = arrive["index"] if came.begins_with("-") \
+					else roads[leg_road(came)].points.size() - 1 - arrive["index"]
+			pts.resize(pts.size() - cut)
 			curves[n] = pts.size() - 1
-			pts.append_array(_across(pts[pts.size() - 1], pts[pts.size() - 2], rp[first], rp[first + 1]))
+			pts.append_array(way_round(place, arrive, leave))
 		starts.append(pts.size())
 		out.append({"leg": leg, "road": r.id, "area": r.area})
 		for i in range(first, rp.size()):
@@ -419,11 +417,9 @@ func path(legs: Array) -> Dictionary:
 	return {"points": even, "legs": out, "end": at}
 
 
-## The way across a plaza, from leaving one road at `a` (having come from
-## `a_before`) to joining the next at `b` (going on to `b_after`), about a
-## metre apart, not including a or b. A curve that leaves along the way in
-## and arrives along the way out, shaped like a circle's arc; a turn right
-## back swings wide round the plaza.
+## A curve from `a` (having come from `a_before`) to `b` (going on to
+## `b_after`), about a metre apart, not including a or b: it leaves along the
+## way in and arrives along the way out, shaped like a circle's arc.
 static func _across(a: Vector3, a_before: Vector3, b: Vector3, b_after: Vector3) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	var a2 := Vector2(a.x, a.z)
@@ -447,72 +443,152 @@ static func _across(a: Vector3, a_before: Vector3, b: Vector3, b_after: Vector3)
 	return out
 
 
-## The radius of a place's round plaza: big enough that the roads leaving it
-## have come apart by its rim.
-func plaza_radius(place: String) -> float:
-	if _plazas.has(place):
-		return _plazas[place]
+# --- roundabouts -------------------------------------------------------------
+
+## Every place is a roundabout: a ring road round an island, which the roads
+## join by curving on to it and off it (RING_TURN), all one way round
+## (CLOCKWISE). {"centre": Vector2, "elev", "ring": the ring's radius (its
+## centre line), "start": how far out each road's way on begins (and its way
+## off ends), "shift": the angle round the ring from a road to where its way
+## on joins the ring (and back from it to where its way off leaves), "arms":
+## [{"road", "end" ("from" or "to"), "index" (the road's point where its way
+## on begins), "angle" (of that point, from the centre)}], in order round
+## the way it goes}. The ring is as small as leaves RING_GAP between one
+## road's curves and the next's.
+func roundabout(place: String) -> Dictionary:
+	if _roundabouts.has(place):
+		return _roundabouts[place]
 	var centre: Vector2 = PLACES[place]["at"]
-	var dirs: Array[Vector2] = []
-	for id in road_ids:
-		var pts: PackedVector3Array = roads[id].points
-		var ends := []
-		if roads[id].from == place:
-			ends.append(pts[mini(6, pts.size() - 1)])
-		if roads[id].to == place:
-			ends.append(pts[maxi(pts.size() - 7, 0)])
-		for e in ends:
-			dirs.append((Vector2(e.x, e.z) - centre).normalized())
-	var closest := PI
-	for i in dirs.size():
-		for j in range(i + 1, dirs.size()):
-			closest = minf(closest, absf(dirs[i].angle_to(dirs[j])))
-	var r := clampf((ROAD_HALF + 0.5) / sin(maxf(closest, 0.05) * 0.5) + 3.0, PLAZA_MIN, PLAZA_MAX)
-	_plazas[place] = r
-	return r
+	var way := 1.0 if CLOCKWISE else -1.0
+	var rb := {}
+	var ring := RING_MIN
+	while true:
+		# The way on is a circle's arc touching the road and the ring: it
+		# starts this far out along the road, and joins the ring this far
+		# round from it.
+		var start := sqrt(ring * ring + 2.0 * ring * RING_TURN)
+		var shift := atan(RING_TURN / start)
+		var arms := []
+		for id in road_ids:
+			var pts: PackedVector3Array = roads[id].points
+			if roads[id].from == place:
+				var i := 0
+				while i < pts.size() - 2 and Vector2(pts[i].x, pts[i].z).distance_to(centre) < start:
+					i += 1
+				arms.append({"road": id, "end": "from", "index": i})
+			if roads[id].to == place:
+				var i := pts.size() - 1
+				while i > 1 and Vector2(pts[i].x, pts[i].z).distance_to(centre) < start:
+					i -= 1
+				arms.append({"road": id, "end": "to", "index": i})
+		for arm in arms:
+			var p: Vector3 = roads[arm["road"]].points[arm["index"]]
+			arm["angle"] = (Vector2(p.x, p.z) - centre).angle()
+		arms.sort_custom(func(x: Dictionary, y: Dictionary) -> bool: return x["angle"] * way < y["angle"] * way)
+		var room := TAU
+		for k in arms.size():
+			room = minf(room, fposmod((arms[(k + 1) % arms.size()]["angle"] - arms[k]["angle"]) * way, TAU))
+		rb = {"centre": centre, "elev": float(PLACES[place]["elev"]), "ring": ring, "start": start,
+			"shift": shift, "arms": arms}
+		if room >= 2.0 * shift + RING_GAP / (ring + ROAD_HALF) or ring >= RING_MAX:
+			break
+		ring += 1.0
+	_roundabouts[place] = rb
+	return rb
 
 
-## How far from a place its roads end and the ways across its plaza begin.
-func join_radius(place: String) -> float:
-	return plaza_radius(place) * PLAZA_JOIN
+## The outer edge of a place's roundabout, m from its centre.
+func roundabout_radius(place: String) -> float:
+	return roundabout(place)["ring"] + ROAD_HALF
 
 
-## The part of a road outside the plazas at its ends: [first, last] point.
+## The arm of a place's roundabout that `leg` arrives along (or leaves along).
+func _arm(place: String, leg: String, arriving: bool) -> Dictionary:
+	var end := "to" if arriving != leg.begins_with("-") else "from"
+	for arm in roundabout(place)["arms"]:
+		if arm["road"] == leg_road(leg) and arm["end"] == end:
+			return arm
+	assert(false, "%s doesn't touch %s" % [leg, place])
+	return {}
+
+
+## An arm's road point where its way on starts, and the next one out.
+func _arm_points(arm: Dictionary) -> Array[Vector3]:
+	var pts: PackedVector3Array = roads[arm["road"]].points
+	var out := 1 if arm["end"] == "from" else -1
+	return [pts[arm["index"]], pts[arm["index"] + out]]
+
+
+## The point on a roundabout's ring at `angle`, and which way the ring goes
+## there.
+func _on_ring(rb: Dictionary, angle: float) -> Array[Vector3]:
+	var way := 1.0 if CLOCKWISE else -1.0
+	var at: Vector2 = rb["centre"] + Vector2.from_angle(angle) * float(rb["ring"])
+	var dir := Vector2.from_angle(angle + way * PI * 0.5)
+	return [Vector3(at.x, rb["elev"], at.y), Vector3(dir.x, 0.0, dir.y)]
+
+
+## The way on to a roundabout's ring from an arm: the road's point, the
+## curve, and the point where it joins the ring.
+func ramp_on(place: String, arm: Dictionary) -> PackedVector3Array:
+	var rb := roundabout(place)
+	var way := 1.0 if CLOCKWISE else -1.0
+	var road := _arm_points(arm)
+	var ring := _on_ring(rb, arm["angle"] + way * float(rb["shift"]))
+	var out := PackedVector3Array([road[0]])
+	out.append_array(_across(road[0], road[1], ring[0], ring[0] + ring[1]))
+	out.append(ring[0])
+	return out
+
+
+## The way off a roundabout's ring on to an arm: where it leaves the ring,
+## the curve, and the road's point where it ends.
+func ramp_off(place: String, arm: Dictionary) -> PackedVector3Array:
+	var rb := roundabout(place)
+	var way := 1.0 if CLOCKWISE else -1.0
+	var road := _arm_points(arm)
+	var ring := _on_ring(rb, arm["angle"] - way * float(rb["shift"]))
+	var out := PackedVector3Array([ring[0]])
+	out.append_array(_across(ring[0], ring[0] - ring[1], road[0], road[1]))
+	out.append(road[0])
+	return out
+
+
+## Round a roundabout's ring from angle `from` to angle `to`, the way it
+## goes, about a metre apart, both ends included. From a point to itself is
+## once round.
+func ring_arc(place: String, from: float, to: float) -> PackedVector3Array:
+	var rb := roundabout(place)
+	var way := 1.0 if CLOCKWISE else -1.0
+	var sweep := fposmod((to - from) * way, TAU)
+	if sweep < 1e-4:
+		sweep = TAU
+	var n := maxi(1, ceili(sweep * float(rb["ring"])))
+	var out := PackedVector3Array()
+	for k in n + 1:
+		out.append(_on_ring(rb, from + way * sweep * k / n)[0])
+	return out
+
+
+## The way round a place's roundabout, from arriving along one arm to
+## leaving along another (or the same one, once round): on, round and off,
+## about a metre apart, without the two roads' own points.
+func way_round(place: String, arrive: Dictionary, leave: Dictionary) -> PackedVector3Array:
+	var rb := roundabout(place)
+	var way := 1.0 if CLOCKWISE else -1.0
+	var on := ramp_on(place, arrive)
+	var off := ramp_off(place, leave)
+	var out := on.slice(1, on.size() - 1)
+	out.append_array(ring_arc(place, arrive["angle"] + way * float(rb["shift"]),
+			leave["angle"] - way * float(rb["shift"])))
+	out.append_array(off.slice(1, off.size() - 1))
+	return out
+
+
+## The part of a road outside the roundabouts at its ends: [first, last] point.
 func road_span(id: String) -> Array[int]:
 	var r: Road = roads[id]
-	var pts := r.points
-	var first := 0
-	var c0: Vector2 = PLACES[r.from]["at"]
-	var c1: Vector2 = PLACES[r.to]["at"]
-	while first < pts.size() - 2 and Vector2(pts[first].x, pts[first].z).distance_to(c0) < join_radius(r.from):
-		first += 1
-	var last := pts.size() - 1
-	while last > first + 1 and Vector2(pts[last].x, pts[last].z).distance_to(c1) < join_radius(r.to):
-		last -= 1
-	return [first, last]
-
-
-## The ways across a place's plaza, from every road there to every other,
-## on the same curves the rider takes (path()). Each has the road's point
-## beyond either end as well, to line its ends up with the roads'.
-func plaza_ways(place: String) -> Array[PackedVector3Array]:
-	var arms := []  # [where a road meets the plaza, its next point out]
-	for id in road_ids:
-		var r: Road = roads[id]
-		var span := road_span(id)
-		if r.from == place:
-			arms.append([r.points[span[0]], r.points[span[0] + 1]])
-		if r.to == place:
-			arms.append([r.points[span[1]], r.points[span[1] - 1]])
-	var out: Array[PackedVector3Array] = []
-	for i in arms.size():
-		for j in range(i + 1, arms.size()):
-			var way := PackedVector3Array([arms[i][1], arms[i][0]])
-			way.append_array(_across(arms[i][0], arms[i][1], arms[j][0], arms[j][1]))
-			way.append(arms[j][0])
-			way.append(arms[j][1])
-			out.append(way)
-	return out
+	return [_arm(r.from, id, false)["index"], _arm(r.to, id, true)["index"]]
 
 
 ## A segment's start and end on the island.
@@ -751,11 +827,12 @@ func bake() -> void:
 				h = lerpf(level + k * 1.2, open, smoothstep(SHOULDER, BLEND, d))
 			heights[at] = h
 			road_distance[at] = minf(d, BLEND)
-	# Every place's plaza: level with the place, easing out into the land.
+	# Every place's roundabout, with its ways on and off: level with the
+	# place, easing out into the land.
 	for id in PLACES:
 		var c: Vector2 = PLACES[id]["at"]
 		var elev: float = PLACES[id]["elev"]
-		var r := plaza_radius(id)
+		var r: float = roundabout(id)["start"]
 		var reach := r + 14.0
 		for gz in range(maxi(floori((c.y - reach - origin.y) / CELL), 0), mini(ceili((c.y + reach - origin.y) / CELL), depth - 1) + 1):
 			for gx in range(maxi(floori((c.x - reach - origin.x) / CELL), 0), mini(ceili((c.x + reach - origin.x) / CELL), width - 1) + 1):
@@ -851,7 +928,7 @@ func _far_field() -> Callable:
 ## noticed.
 static func fingerprint() -> int:
 	return hash(str([PLACES, ROADS, AREAS, STEP, FLAT, SHOULDER, BLEND, CELL, FAR_CELL, OUTSIDE,
-		MARGIN, HILLS_FROM_EDGE, PLAZA_MIN, PLAZA_MAX, 5]))
+		MARGIN, HILLS_FROM_EDGE, RING_MIN, RING_MAX, RING_TURN, RING_GAP, CLOCKWISE, 6]))
 
 
 func save_baked(file: String) -> Error:

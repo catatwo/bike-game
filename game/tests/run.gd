@@ -73,7 +73,9 @@ func test_every_route_is_sane() -> void:
 			lo = minf(lo, g)
 			hi = maxf(hi, g)
 		check(lo >= Route.MIN_GRADE and hi <= Route.MAX_GRADE, "%s grades in range" % r.title)
-		near(r.grade_at(0.0), 0.0, 0.002, "%s starts flat" % r.title)
+		# (A ride starts where its road leaves the roundabout, 20-30 m out,
+		# where the road's rolling may just have begun.)
+		near(r.grade_at(0.0), 0.0, 0.005, "%s starts flat" % r.title)
 		if not r.endless:
 			near(r.grade_at(r.length), 0.0, 0.002, "%s finishes flat" % r.title)
 		check(Catalog.themes().has(r.theme), "%s theme exists" % r.title)
@@ -235,6 +237,86 @@ func test_turns_at_a_place() -> void:
 			func(o: Dictionary) -> bool: return o["leg"] == "south-road"), "avoided roads aren't offered")
 	var dead := isl.turn_options("summit", "summit-road", ["summit-east"])
 	check(dead.size() == 1 and dead[0]["leg"] == "-summit-road", "a dead end turns back")
+
+
+func test_roundabouts_leave_room_between_roads() -> void:
+	var isl := Island.main()
+	var way := 1.0 if Island.CLOCKWISE else -1.0
+	for place in Island.PLACES:
+		var rb := isl.roundabout(place)
+		var arms: Array = rb["arms"]
+		var need: float = 2.0 * rb["shift"] + Island.RING_GAP / (rb["ring"] + Route.ROAD_HALF)
+		var room := TAU
+		for k in arms.size():
+			room = minf(room, fposmod((arms[(k + 1) % arms.size()]["angle"] - arms[k]["angle"]) * way, TAU))
+		check(room >= need, "%s: its roads far enough apart for their ways on and off (%.0f° of %.0f°)"
+				% [place, rad_to_deg(room), rad_to_deg(need)])
+
+
+func test_the_way_round_a_roundabout() -> void:
+	# From every road to every other (and back to itself): joined up, never
+	# over the island, round the ring the one way only, and once round to
+	# go back. (The curves on and off follow their road's own direction,
+	# which near a bend in it may lean back a little round the centre.)
+	var isl := Island.main()
+	var way := 1.0 if Island.CLOCKWISE else -1.0
+	var bad := []
+	for place in Island.PLACES:
+		var rb := isl.roundabout(place)
+		var c: Vector2 = rb["centre"]
+		for a in rb["arms"]:
+			for b in rb["arms"]:
+				var pts := PackedVector3Array([isl.ramp_on(place, a)[0]])
+				pts.append_array(isl.way_round(place, a, b))
+				pts.append(isl.ramp_off(place, b)[-1])
+				var gap := 0.0
+				var inside := INF
+				var backwards := 0.0
+				var swept := 0.0
+				for i in range(1, pts.size()):
+					var p := Vector2(pts[i].x, pts[i].z) - c
+					var q := Vector2(pts[i - 1].x, pts[i - 1].z) - c
+					gap = maxf(gap, p.distance_to(q))
+					inside = minf(inside, p.length())
+					var turn := angle_difference(q.angle(), p.angle()) * way
+					if absf(p.length() - float(rb["ring"])) < 0.01 and absf(q.length() - float(rb["ring"])) < 0.01:
+						backwards = minf(backwards, turn)
+					swept += turn
+				var name := "%s: %s %s to %s %s" % [place, a["road"], a["end"], b["road"], b["end"]]
+				if gap > 1.5 or inside < float(rb["ring"]) - 0.01 or backwards < -1e-3:
+					bad.append("%s (gap %.1f m, %.1f m from the centre)" % [name, gap, inside])
+				if a == b and absf(swept - TAU) > 0.05:
+					bad.append("%s goes round %.0f°" % [name, rad_to_deg(swept)])
+	check(bad.is_empty(), "every way round every roundabout is right: %s" % [bad])
+
+
+func test_riding_is_smooth() -> void:
+	# The sideways pull at 30 km/h, from the way's own heading every metre:
+	# no sharper than the curves on to a roundabout (7.9 m/s² measured), and
+	# never changing in a jolt. A kink (the plaza curves' U-turn, 218 m/s²)
+	# or a way drawn straight from point to point fails it.
+	var v := 30.0 / 3.6
+	for spec in Catalog.routes() + Catalog.free_rides():
+		var r := Route.from_spec(spec)
+		if r.roaming:
+			_roam_to(r, 20000.0)
+		var end := r.length if not r.endless else 20000.0
+		var pull := 0.0
+		var change := 0.0
+		var h := r.heading_at(0.0)
+		var k := 0.0
+		var s := 1.0
+		while s < end:
+			var h2 := r.heading_at(s)
+			var k2 := angle_difference(h, h2)
+			pull = maxf(pull, v * v * absf(k2))
+			if s > 2.0:
+				change = maxf(change, v * v * absf(k2 - k))
+			h = h2
+			k = k2
+			s += 1.0
+		check(pull < 9.0 and change < 4.0, "%s is smooth (pull %.1f m/s², changing by %.1f per metre)"
+				% [spec["name"], pull, change])
 
 
 func test_choosing_a_turn_keeps_the_road_ridden() -> void:

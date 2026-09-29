@@ -20,7 +20,7 @@ const ENDLESS := 150000.0  # m of road laid out ahead for a free ride
 const THEME_BLEND := 300.0  # m over which the colours change between areas
 const ROAM_AHEAD := 12000.0  # m of road laid out ahead of a roaming rider...
 const ROAM_TOP_UP := 6000.0  # ...topped up when less than this is left
-const TURN_CLOSES := 15.0  # m before the curve across a plaza: the turn there is taken
+const TURN_CLOSES := 15.0  # m before the way round a roundabout: the turn there is taken
 
 var id := ""
 var title := ""
@@ -69,7 +69,7 @@ static func from_spec(spec: Dictionary) -> Route:
 	r.length = ENDLESS
 	if not r.endless:
 		# Past the finish the road carries on, the straightest way, for a
-		# while, joined across the plaza like any other road. The finish
+		# while, joined round the roundabout like any other road. The finish
 		# line is where the way passes closest to the last place.
 		var at: String = p["end"]
 		var came: String = r.legs.back()["leg"]
