@@ -192,6 +192,17 @@ another computer running this bridge, keeps the bridge from finding it.
   nothing and a bike is remembered, `let_go_of()` asks BlueZ over D-Bus
   whether it's still connected and disconnects it. `test_bridge.Stopping`
   fails without the handler.
+- 🔴 **A Bluetooth controller can come up from a cold start in a state
+  where every link drops within 2-20 s**, whatever is sent over it (seen on
+  the maintainer's Intel 7265, 2026-09-29: this morning's bridge, today's,
+  and a script that connected and did nothing all dropped alike, at -49
+  dBm, with the chip awake and Wi-Fi on 5 GHz). Switching the adapter off
+  and on cleared it at once. So after `DROPS_BEFORE_RESTART` connections in
+  a row shorter than `SHORT_LINK`, `run_bike` calls `restart_bluetooth()`
+  (Adapter1 `Powered` off and on over D-Bus, no root needed), at most every
+  `RESTART_GAP`, and never while anything but the bike is connected to that
+  adapter (a desktop's headphones or keyboard). Don't blame the bike or the
+  bridge's commands for quick drops before trying that.
 - **The bridge keeps retrying when there's no Bluetooth adapter** (state
   `no_adapter`, shown in the game) instead of crash-looping on BlueZ's D-Bus
   timeout.

@@ -40,6 +40,10 @@ MIN_WRITE_GAP = 0.5  # seconds between commands to the bike
 CONTROL_RETRY = 3.0  # seconds between asks when the bike refuses control
 ANSWER_WAIT = 3.0  # seconds to wait for the bike to answer a command
 ADAPTER_RETRY = 15.0  # seconds between looks for a Bluetooth adapter
+SHORT_LINK = 30.0  # a connection that ends sooner than this counts as dropped...
+DROPS_BEFORE_RESTART = 3  # ...and this many in a row restart the computer's Bluetooth,
+RESTART_GAP = 300.0  # at most this often (seconds)
+RECONNECT_GAP = 2.0  # seconds between one connection ending and the next search
 
 log = logging.getLogger("bikebridge")
 
@@ -293,10 +297,60 @@ async def let_go_of(address: str) -> bool:
         bus.disconnect()
 
 
+async def restart_bluetooth(bike: str) -> str:
+    """Switches the computer's Bluetooth adapter off and on. A controller can
+    come up (from a cold start, seen on an Intel 7265) in a state where every
+    link drops within seconds of connecting, whatever is sent over it, and
+    that clears it. Never while anything but the bike is connected to it
+    (headphones, a keyboard): returns why not, or "" when it's done."""
+    from dbus_fast import BusType, Message, MessageType, Variant
+    from dbus_fast.aio import MessageBus
+
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(Message(
+            destination="org.bluez", path="/",
+            interface="org.freedesktop.DBus.ObjectManager",
+            member="GetManagedObjects"))
+        if reply.message_type == MessageType.ERROR:
+            return f"BlueZ didn't answer: {reply.body}"
+        objects = reply.body[0]
+        adapter = ""
+        for path, interfaces in objects.items():
+            device = interfaces.get("org.bluez.Device1")
+            if device and device["Address"].value.upper() == bike.upper():
+                adapter = device["Adapter"].value
+        if not adapter:
+            return "the bike isn't known to BlueZ"
+        others = [interfaces["org.bluez.Device1"]["Name"].value
+                  if "Name" in interfaces["org.bluez.Device1"] else path
+                  for path, interfaces in objects.items()
+                  if "org.bluez.Device1" in interfaces
+                  and interfaces["org.bluez.Device1"]["Adapter"].value == adapter
+                  and interfaces["org.bluez.Device1"]["Connected"].value
+                  and interfaces["org.bluez.Device1"]["Address"].value.upper() != bike.upper()]
+        if others:
+            return "other devices are connected to it: " + ", ".join(others)
+        for on in (False, True):
+            reply = await bus.call(Message(
+                destination="org.bluez", path=adapter,
+                interface="org.freedesktop.DBus.Properties", member="Set",
+                signature="ssv", body=["org.bluez.Adapter1", "Powered", Variant("b", on)]))
+            if reply.message_type == MessageType.ERROR:
+                return f"couldn't switch it {'on' if on else 'off'}: {reply.body}"
+            await asyncio.sleep(2)
+        return ""
+    finally:
+        bus.disconnect()
+
+
 async def run_bike(link: Link, state: dict, name: str | None):
     from bleak import BleakClient, BleakScanner
 
+    loop = asyncio.get_running_loop()
     problem = ""
+    drops = 0
+    restarted = -RESTART_GAP
     while True:
         state.update(state="searching", bike=None, simulation=False,
                      erg=False, controlled=False)
@@ -332,15 +386,32 @@ async def run_bike(link: Link, state: dict, name: str | None):
                     log.debug("can't check BlueZ for %s: %s", known, exc)
             continue
         log.info("found %s (%s)", device.name, device.address)
+        began = loop.time()
         try:
             async with BleakClient(device) as client:
                 remember(device.address)
                 state.update(state="connected",
                              bike=device.name or device.address)
                 await ride(client, link, state)
+            log.info("the bike disconnected, after %.0f s", loop.time() - began)
         except Exception as exc:  # bleak and D-Bus raise many kinds
             log.warning("bike connection ended: %s", exc)
-        await asyncio.sleep(2)
+        drops = drops + 1 if loop.time() - began < SHORT_LINK else 0
+        if drops >= DROPS_BEFORE_RESTART and loop.time() - restarted >= RESTART_GAP:
+            drops = 0
+            restarted = loop.time()
+            try:
+                why = await restart_bluetooth(device.address)
+            except Exception as exc:  # D-Bus trouble: keep going as we are
+                why = str(exc)
+            if why:
+                log.warning("the bike keeps dropping the connection, but this "
+                            "computer's Bluetooth can't be restarted: %s", why)
+            else:
+                log.warning("the bike kept dropping the connection within "
+                            "seconds: switched this computer's Bluetooth off "
+                            "and on")
+        await asyncio.sleep(RECONNECT_GAP)
 
 
 async def run_fake(link: Link, state: dict, watts: float):

@@ -328,6 +328,152 @@ class Reconnecting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events[-1], "disconnect")
 
 
+class DroppedLinks(unittest.IsolatedAsyncioTestCase):
+    """A Bluetooth controller that drops every link within seconds gets
+    restarted, once in a while, never while links last."""
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(bikebridge, "STATE_FILE", self.tmp / "bike"))
+        self.enterContext(mock.patch.object(bikebridge, "RECONNECT_GAP", 0.0))
+        self.connects = 0
+        self.restarts = []
+        test = self
+
+        class Device:
+            address = "AA:BB"
+            name = "Domyos-Biking-1"
+
+        class Client:
+            def __init__(self, device, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                test.connects += 1
+                return self
+
+            async def __aexit__(self, *exc):
+                pass
+
+        class Scanner:
+            @staticmethod
+            async def find_device_by_filter(filterfunc, timeout):
+                await asyncio.sleep(0.001)
+                return Device()
+
+        async def ride(client, link, state):
+            await asyncio.sleep(0.001)  # the bike drops the link at once
+
+        async def restart(bike):
+            test.restarts.append((test.connects, bike))
+            return ""
+
+        self.fake = types.ModuleType("bleak")
+        self.fake.BleakClient = Client
+        self.fake.BleakScanner = Scanner
+        self.enterContext(mock.patch.dict(sys.modules, {"bleak": self.fake}))
+        self.enterContext(mock.patch.object(bikebridge, "ride", ride))
+        self.enterContext(mock.patch.object(bikebridge, "restart_bluetooth", restart))
+
+    async def run_until(self, connects):
+        task = asyncio.create_task(bikebridge.run_bike(bikebridge.Link(), {}, None))
+        await until(lambda: self.connects >= connects)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_three_quick_drops_restart_bluetooth(self):
+        await self.run_until(4)
+        self.assertEqual(self.restarts, [(3, "AA:BB")])
+
+    async def test_not_more_often_than_every_few_minutes(self):
+        await self.run_until(10)
+        self.assertEqual(len(self.restarts), 1)
+
+    async def test_again_once_the_gap_has_passed(self):
+        with mock.patch.object(bikebridge, "RESTART_GAP", 0.0):
+            await self.run_until(10)
+        self.assertEqual([n for n, _ in self.restarts], [3, 6, 9])
+
+    async def test_links_that_last_restart_nothing(self):
+        with mock.patch.object(bikebridge, "SHORT_LINK", 0.0):
+            await self.run_until(10)
+        self.assertEqual(self.restarts, [])
+
+
+class RestartBluetooth(unittest.IsolatedAsyncioTestCase):
+    """restart_bluetooth() against a made-up BlueZ on D-Bus."""
+
+    def setUp(self):
+        self.calls = []
+        self.devices = {
+            "/org/bluez/hci0/dev_AA_BB": {"Address": "AA:BB", "Name": "Domyos-Biking-1",
+                                          "Connected": False},
+            "/org/bluez/hci0/dev_11_22": {"Address": "11:22", "Name": "Headphones",
+                                          "Connected": False},
+        }
+        calls = self.calls
+        test = self
+
+        class Variant:
+            def __init__(self, signature, value=None):
+                self.value = signature if value is None else value
+
+        class Message:
+            def __init__(self, **kw):
+                self.__dict__.update(kw)
+
+        class Reply:
+            def __init__(self, body):
+                self.body = body
+                self.message_type = "return"
+
+        class Bus:
+            def __init__(self, bus_type):
+                pass
+
+            async def connect(self):
+                return self
+
+            async def call(self, msg):
+                if msg.member == "GetManagedObjects":
+                    objects = {"/org/bluez/hci0": {"org.bluez.Adapter1": {}}}
+                    for path, d in test.devices.items():
+                        objects[path] = {"org.bluez.Device1": {
+                            k: Variant(v) for k, v in dict(d, Adapter="/org/bluez/hci0").items()}}
+                    return Reply([objects])
+                calls.append((msg.path, msg.member, msg.body[1], msg.body[2].value))
+                return Reply([])
+
+            def disconnect(self):
+                pass
+
+        dbus = types.ModuleType("dbus_fast")
+        dbus.BusType = types.SimpleNamespace(SYSTEM="system")
+        dbus.Message = Message
+        dbus.MessageType = types.SimpleNamespace(ERROR="error")
+        dbus.Variant = Variant
+        aio = types.ModuleType("dbus_fast.aio")
+        aio.MessageBus = Bus
+        self.enterContext(mock.patch.dict(sys.modules, {"dbus_fast": dbus, "dbus_fast.aio": aio}))
+        self.enterContext(mock.patch.object(bikebridge.asyncio, "sleep", mock.AsyncMock()))
+
+    async def test_switches_the_bikes_adapter_off_and_on(self):
+        self.assertEqual(await bikebridge.restart_bluetooth("aa:bb"), "")
+        self.assertEqual(self.calls, [("/org/bluez/hci0", "Set", "Powered", False),
+                                      ("/org/bluez/hci0", "Set", "Powered", True)])
+
+    async def test_never_while_something_else_is_connected(self):
+        self.devices["/org/bluez/hci0/dev_11_22"]["Connected"] = True
+        why = await bikebridge.restart_bluetooth("AA:BB")
+        self.assertIn("Headphones", why)
+        self.assertEqual(self.calls, [])
+
+    async def test_nothing_for_a_bike_bluez_doesnt_know(self):
+        self.assertIn("isn't known", await bikebridge.restart_bluetooth("CC:DD"))
+        self.assertEqual(self.calls, [])
+
+
 class LetGoOf(unittest.IsolatedAsyncioTestCase):
     """let_go_of() against a made-up BlueZ on D-Bus."""
 
