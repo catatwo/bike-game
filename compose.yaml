@@ -1,0 +1,62 @@
+services:
+  # Talks to the bike over Bluetooth, through the host's BlueZ, and relays it
+  # to the game on 127.0.0.1. Starts with the machine and waits for the bike.
+  bridge:
+    build:
+      context: .
+      dockerfile: bridge/Dockerfile
+    image: bike-game-bridge
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      - /etc/localtime:/etc/localtime:ro
+      - state:/state
+
+  # The game on a computer dedicated to the bike, with no desktop running: it
+  # draws straight onto the screen, reads the keyboard itself and plays through
+  # the first USB sound card. Starts with the computer.
+  kiosk:
+    profiles: [kiosk]
+    build:
+      context: .
+      dockerfile: game/Dockerfile
+    image: bike-game
+    network_mode: host
+    # The screen, keyboard and sound devices: the computer runs nothing else.
+    privileged: true
+    restart: unless-stopped
+    environment:
+      BIKE_GAME_MODE: kiosk
+      # EXIT_ACTION: poweroff    # the menu's Exit shuts the computer down
+    volumes:
+      - /run/udev:/run/udev:ro
+      # For EXIT_ACTION=poweroff: it asks the host's logind to power off.
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      - /etc/localtime:/etc/localtime:ro
+      - ./data:/data
+
+  # The game as a window on a Linux desktop, using the session's
+  # Wayland display and PipeWire/PulseAudio sound.
+  game:
+    profiles: [desktop]
+    build:
+      context: .
+      dockerfile: game/Dockerfile
+    image: bike-game
+    network_mode: host
+    user: "1000:1000"
+    devices:
+      - /dev/dri
+    environment:
+      XDG_RUNTIME_DIR: /tmp/session
+      WAYLAND_DISPLAY: wayland-0
+      PULSE_SERVER: unix:/tmp/session/pulse
+    volumes:
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/${WAYLAND_DISPLAY:-wayland-0}:/tmp/session/wayland-0
+      - ${XDG_RUNTIME_DIR:-/run/user/1000}/pulse/native:/tmp/session/pulse
+      - /etc/localtime:/etc/localtime:ro
+      - ./data:/data
+
+volumes:
+  state:

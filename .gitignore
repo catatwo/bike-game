@@ -1,0 +1,8 @@
+__pycache__/
+.godot/
+/build/
+/data/*
+!/data/.gitkeep
+/game/sounds/
+/compose.override.yaml
+/game/world/island.bin
