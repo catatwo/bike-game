@@ -39,6 +39,7 @@ STATE_FILE = (Path(os.environ.get("XDG_STATE_HOME",
 MIN_WRITE_GAP = 0.5  # seconds between commands to the bike
 CONTROL_RETRY = 3.0  # seconds between asks when the bike refuses control
 ANSWER_WAIT = 3.0  # seconds to wait for the bike to answer a command
+PEDAL_AGAIN = 15.0  # still for this long, then pedalling: ask for control and to start again
 ADAPTER_RETRY = 15.0  # seconds between looks for a Bluetooth adapter
 SHORT_LINK = 30.0  # a connection that ends sooner than this counts as dropped...
 DROPS_BEFORE_RESTART = 3  # ...and this many in a row restart the computer's Bluetooth,
@@ -115,14 +116,31 @@ async def ride(client, link: Link, state: dict):
     reading = {"power": None, "cadence": None, "speed": None}
     answers: dict[int, asyncio.Future] = {}
     lost = asyncio.Event()  # the bike needs taking control of again
+    pedalling = asyncio.Event()  # the rider has just started pedalling
+    loop = asyncio.get_running_loop()
+    still_since = loop.time()  # the pedals have been still since (connecting counts)
+    moving = False
+    resistance = None
     asking = False  # a request for control or to start is on its way
 
     def on_data(_, data):
+        nonlocal still_since, moving, resistance
         try:
             d = ftms.parse_bike_data(bytes(data))
         except struct.error:
             log.warning("short bike data packet: %s", bytes(data).hex())
             return
+        if d.cadence_rpm is not None:
+            if d.cadence_rpm > 0 and not moving:
+                moving = True
+                if loop.time() - still_since >= PEDAL_AGAIN:
+                    pedalling.set()
+            elif d.cadence_rpm == 0 and moving:
+                moving = False
+                still_since = loop.time()
+        if d.resistance is not None and d.resistance != resistance:
+            resistance = d.resistance
+            log.info("bike's resistance level: %d", resistance)
         for key, value in (("power", d.power_w), ("cadence", d.cadence_rpm),
                            ("speed", d.speed_kmh)):
             if value is not None:
@@ -225,6 +243,13 @@ async def ride(client, link: Link, state: dict):
     await take_control()
     unsupported = set()
     while client.is_connected:
+        if pedalling.is_set():
+            # The start is sent as soon as the bike connects, which at power-on
+            # is before anyone is on it; ask again once someone is.
+            pedalling.clear()
+            log.info("pedalling started: asking the bike for control and to start again")
+            await take_control()
+            continue
         if lost.is_set():
             await take_control()
             continue

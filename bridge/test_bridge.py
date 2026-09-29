@@ -74,14 +74,14 @@ async def until(check, timeout=2.0):
 class Ride(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self._saved = (bikebridge.MIN_WRITE_GAP, bikebridge.CONTROL_RETRY,
-                       bikebridge.ANSWER_WAIT)
+                       bikebridge.ANSWER_WAIT, bikebridge.PEDAL_AGAIN)
         bikebridge.MIN_WRITE_GAP = 0
         bikebridge.CONTROL_RETRY = 0.05
         bikebridge.ANSWER_WAIT = 0.1
 
     def tearDown(self):
         (bikebridge.MIN_WRITE_GAP, bikebridge.CONTROL_RETRY,
-         bikebridge.ANSWER_WAIT) = self._saved
+         bikebridge.ANSWER_WAIT, bikebridge.PEDAL_AGAIN) = self._saved
 
     async def start(self, target_features, **fake):
         self.link = bikebridge.Link()
@@ -179,6 +179,39 @@ class Ride(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.1)
         self.assertEqual(self.client.writes, [ftms.request_control(),
                                               ftms.start_or_resume(), ftms.set_simulation(2)])
+
+    async def test_starting_to_pedal_asks_the_bike_to_start_again(self):
+        bikebridge.PEDAL_AGAIN = 0.05
+        await self.start(1 << 13)
+        await until(lambda: self.state.get("controlled"))
+        await asyncio.sleep(0.1)
+        control, go = ftms.request_control(), ftms.start_or_resume()
+        asks = lambda: [w for w in self.client.writes if w in (control, go)]  # noqa: E731
+        self.client.notify("4400f609aa00c800")  # pedalling, after standing still
+        await until(lambda: len(asks()) >= 4)
+        self.assertEqual(asks(), [control, go, control, go])
+        for _ in range(3):  # pedalling on, and a pause shorter than PEDAL_AGAIN
+            self.client.notify("4400f609aa00c800")
+        self.client.notify("4400f6090000c800")
+        self.client.notify("4400f609aa00c800")
+        await asyncio.sleep(0.1)
+        self.assertEqual(self.client.writes.count(go), 2, "asked once")
+
+    async def test_pedalling_straight_away_is_asked_once(self):
+        await self.start(1 << 13)
+        await until(lambda: self.state.get("controlled"))
+        self.client.notify("4400f609aa00c800")
+        await asyncio.sleep(0.1)
+        self.assertEqual(self.client.writes.count(ftms.start_or_resume()), 1)
+
+    async def test_the_bikes_resistance_level_is_logged_when_it_changes(self):
+        await self.start(1 << 13)
+        await until(lambda: self.state.get("controlled"))
+        with self.assertLogs("bikebridge", "INFO") as logs:
+            for level in (7, 7, 9):  # speed, cadence, resistance, power
+                self.client.notify("6400f609aa00" + struct.pack("<h", level).hex() + "c800")
+        self.assertEqual([r.getMessage() for r in logs.records],
+                         ["bike's resistance level: 7", "bike's resistance level: 9"])
 
     async def test_a_refused_command_retakes_control(self):
         await self.start(1 << 3)

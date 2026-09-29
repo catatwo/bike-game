@@ -182,6 +182,16 @@ another computer running this bridge, keeps the bridge from finding it.
   old one-shot code. The Domyos reports "started by the user" (status 0x04)
   in reply to our own start, before answering it, so that report counts as
   play pressed only while the bridge isn't itself asking.
+  It also asks again (control, then start) when the rider starts pedalling
+  after `PEDAL_AGAIN` s still: at power-on the first ask goes out before
+  anyone is on the bike. Still unexplained (2026-09-29): the Domyos
+  console shows "application controlled" only after play is pressed,
+  though it answers every ask with success and follows resistance-level
+  (0x04) and simulation commands before that (its reported resistance
+  level moves). Pressing play sends no FTMS status at all. The bridge logs
+  the bike's resistance level whenever it changes, to see what play
+  changes. The bike also has two private channels (Nordic UART, and a
+  service 04831523-…), silent when only listened to.
 - 🔴 **The bridge must disconnect the bike when it stops.** It's process 1 in
   its container, which the kernel sends no signal it has no handler for, so
   `main()` handles SIGTERM (Docker's stop) by cancelling itself, and
