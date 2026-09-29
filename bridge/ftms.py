@@ -18,6 +18,7 @@ FEATURE = _uuid(0x2ACC)
 INDOOR_BIKE_DATA = _uuid(0x2AD2)
 CONTROL_POINT = _uuid(0x2AD9)
 STATUS = _uuid(0x2ADA)  # Fitness Machine Status: what happened on the bike
+TRAINING_STATUS = _uuid(0x2AD3)  # what the bike thinks is going on: idle, riding...
 
 OP_REQUEST_CONTROL = 0x00
 OP_SET_TARGET_POWER = 0x05
@@ -153,6 +154,23 @@ def set_simulation(grade_pct: float, wind_mps: float = 0.0,
 def set_target_power(watts: float) -> bytes:
     return struct.pack("<Bh", OP_SET_TARGET_POWER,
                        _clamp(round(watts), -32768, 32767))
+
+
+TRAINING_STATES = {
+    0x00: "other", 0x01: "idle", 0x02: "warming up",
+    0x03: "low intensity interval", 0x04: "high intensity interval",
+    0x05: "recovery interval", 0x06: "isometric", 0x07: "heart rate control",
+    0x08: "fitness test", 0x09: "too slow for control", 0x0A: "too fast for control",
+    0x0B: "cool down", 0x0C: "watt control", 0x0D: "manual mode (quick start)",
+    0x0E: "pre-workout", 0x0F: "post-workout",
+}
+
+
+def parse_training_status(data: bytes) -> str | None:
+    """What a Training Status notification says: flags, then the state."""
+    if len(data) < 2:
+        return None
+    return TRAINING_STATES.get(data[1], f"training status 0x{data[1]:02x}")
 
 
 def parse_status(data: bytes) -> tuple[int, str] | None:

@@ -142,13 +142,21 @@ async def ride(client, link: Link, state: dict):
         if status is None:
             return
         code, meaning = status
-        log.info("bike: %s", meaning)
+        log.info("bike: %s (%s)", meaning, bytes(data).hex())
         if code in (ftms.STATUS_RESET, ftms.STATUS_STOPPED_BY_USER,
                     ftms.STATUS_STOPPED_BY_SAFETY_KEY, ftms.STATUS_CONTROL_LOST):
             state["controlled"] = False
             lost.set()
         elif code == ftms.STATUS_STARTED_BY_USER and not state["controlled"]:
             lost.set()  # play was pressed: ask again now
+
+    last_training = [""]
+
+    def on_training(_, data):
+        state_now = ftms.parse_training_status(bytes(data))
+        if state_now and state_now != last_training[0]:
+            last_training[0] = state_now
+            log.info("bike's training state: %s (%s)", state_now, bytes(data).hex())
 
     async def command(data: bytes) -> str:
         """Writes a command and waits for the bike's answer: its result,
@@ -172,8 +180,10 @@ async def ride(client, link: Link, state: dict):
         while client.is_connected:
             lost.clear()
             got = await command(ftms.request_control())
+            log.info("asked the bike for control: %s", got)
             if got in ("success", "no answer"):
                 got = await command(ftms.start_or_resume())
+                log.info("asked the bike to start: %s", got)
             if got in ("success", "no answer"):
                 state["controlled"] = True
                 log.info("bike accepted control%s", "" if got == "success" else " (it doesn't answer)")
@@ -191,10 +201,12 @@ async def ride(client, link: Link, state: dict):
     # Indications must be on before the first write, or the bike can't answer.
     await client.start_notify(ftms.CONTROL_POINT, on_control)
     await client.start_notify(ftms.INDOOR_BIKE_DATA, on_data)
-    try:
-        await client.start_notify(ftms.STATUS, on_status)
-    except Exception as exc:  # a bike without the status characteristic
-        log.info("no fitness machine status from this bike: %s", exc)
+    for uuid, handler, what in ((ftms.STATUS, on_status, "fitness machine status"),
+                                (ftms.TRAINING_STATUS, on_training, "training status")):
+        try:
+            await client.start_notify(uuid, handler)
+        except Exception as exc:  # a bike without that characteristic
+            log.info("no %s from this bike: %s", what, exc)
 
     await take_control()
     unsupported = set()

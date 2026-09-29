@@ -89,3 +89,6 @@ class Status(unittest.TestCase):
         self.assertEqual(ftms.parse_status(bytes([0x04, 0x00])), (0x04, "started on the bike"))
         self.assertEqual(ftms.parse_status(bytes([0x42]))[1], "status 0x42")
         self.assertIsNone(ftms.parse_status(b""))
+        self.assertEqual(ftms.parse_training_status(bytes([0x00, 0x01])), "idle")
+        self.assertEqual(ftms.parse_training_status(bytes([0x00, 0x0D])), "manual mode (quick start)")
+        self.assertIsNone(ftms.parse_training_status(b"\x00"))
