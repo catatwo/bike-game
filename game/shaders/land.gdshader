@@ -29,13 +29,15 @@ void vertex() {
 	world_pos = vec3(w.x, h, w.z);
 }
 
-// 1 on a grid line, 0 between, anti-aliased; fades out where lines crowd
-// together in the distance instead of shimmering.
+// 1 on a grid line, 0 between, anti-aliased. Lines fade out where they crowd
+// together in the distance instead of shimmering, each way on its own: seen
+// along the ground, the lines across the view crowd together long before
+// those running away from the camera.
 float grid(vec2 coord) {
 	vec2 fw = max(fwidth(coord), vec2(1e-4));
 	vec2 d = abs(fract(coord - 0.5) - 0.5) / fw;
-	float on = 1.0 - min(min(d.x, d.y), 1.0);
-	return on * (1.0 - smoothstep(0.15, 0.5, max(fw.x, fw.y)));
+	vec2 on = (1.0 - min(d, vec2(1.0))) * (1.0 - smoothstep(vec2(0.15), vec2(0.5), fw));
+	return max(on.x, on.y);
 }
 
 float line(float coord) {
@@ -45,7 +47,10 @@ float line(float coord) {
 }
 
 void fragment() {
-	float g = grid(world_pos.xz / cell);
+	// Every 4th line and every 16th go on further than the rest, so the land
+	// stays covered with grid out to the horizon.
+	vec2 at = world_pos.xz / cell;
+	float g = max(grid(at), max(grid(at * 0.25), grid(at * 0.0625)));
 	float c = line(world_pos.y / contour_step);
 	ALBEDO = base_color + (line_color * g * 0.9 + contour_color * c * 0.7) * brightness;
 }

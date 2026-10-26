@@ -270,3 +270,43 @@ another computer running this bridge, keeps the bridge from finding it.
   `SCRIPT ERROR` fails the build. Keep it that way.
 - **Screenshots are how the looks get checked.** `--screenshot=... --after=N`
   plus `--keys=...` drives whole journeys; README → Handy options.
+- 🔴 **The rider is smooth shapes, not primitives** (`Loft`, 2026-10-26). The
+  first one, built from balls, capsules and cones, each glowing round its
+  own outline so every joint showed, the maintainer called "dogshit". The
+  upper body is one mesh made once; the legs are one mesh skinned to a
+  `Skeleton3D` (thigh, shin and foot bones per leg) that `_update_legs`
+  poses from the pedals, so nothing is rebuilt per frame. 🔴 The leg mesh
+  needs `skeleton = NodePath("..")` set: Godot's default is none, and the
+  legs then stay in the shape they were made in while the cranks turn (it
+  shipped that way once). It wears a dark neon suit like the bike's frame
+  (the maintainer's choice, after a pink cycling-kit version whose "body
+  shape, head and helmet, the flat pink kit" were the worst of it): a V from
+  shoulders to waist, a one-piece aero helmet over the whole head with a
+  visor along its outline, the outline glowing in the rider's colour.
+  `rider.gdshader` paints from vertex colours: g lines down both sides of a
+  part (UV.x 0 and 0.5), r along the other two (the spine), b glowing all
+  over (visor, cuffs, ankles), a a fill of the rider's colour. Keep the hips
+  narrow: wide hips with glowing bands round the thighs looked like a nappy.
+  The upper body rocks `SWAY` about the hips-to-hands line with the cranks.
+- 🔴 **The front tyre must clear the frame and the rider's toes.** It ran
+  through the down tube and the fork crown, and the toe went into it at the
+  front of the stroke, until `FRONT_HUB` moved ahead of the steering axis
+  (as a fork's offset puts it) and `HEAD_BOTTOM` rose (2026-10-26): 1.5 cm
+  to the down tube, 3.7 cm to the crown, 5.5 cm to the toe. Check those
+  after moving any of `FRONT_HUB`, `HEAD_*`, `BB`, `WHEEL_R` or `CRANK`. The
+  bike is a time-trial machine: a disc wheel behind (flat dark
+  `_disc_mat`: the frame's edge-glow material lit the whole disc), three
+  aero blades in front, glowing treads, a compact sloping frame.
+- **Road edges are neon tubes** (`road.gdshader`): a band of the area's
+  colour at full saturation round a thin core of the colour itself. A pale
+  edge colour drawn bright enough to glow came out white (the mountain,
+  hills, valley and gold areas did). Roundabout lines (`World._line`) get
+  UVs spanning the same width, so they match.
+- **Beside every road** (`World._roadside`) stand posts, every `POST_GAP / 2`
+  m on alternate sides (tall lamps in the city), and small scenery of the
+  area's kind: passing them is what shows the speed. They stand only
+  between a road's `road_span` ends, 10 m clear of the curves on to
+  roundabouts, and `nearest_road()` keeps them off other roads. The land
+  grid fades its two directions separately and has 40 m and 160 m levels,
+  so the ground stays lined to the horizon. On the bike PC (RX 580, High) all
+  of this held 144 fps with the GPU 7-15% busy (2026-10-26).

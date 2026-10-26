@@ -18,6 +18,11 @@ const GATE_CHUNK := 400.0
 const GATES_AHEAD := 6
 const SCENERY_GRID := 40.0  # m between spots where scenery might stand
 const SCENERY_DENSITY := [0.2, 0.4, 0.65]  # by graphics quality
+const POST_GAP := 20.0  # m between the posts along each side of a road
+const POST_OUT := 1.0  # m beyond the road's edge
+const POST_SHOW := 900.0  # posts further away than this aren't drawn
+const NEAR_GAP := 15.0  # m between spots beside a road where scenery might stand
+const NEAR_DENSITY := [0.25, 0.45, 0.7]  # by graphics quality
 const FAR_SHOW := 2600.0  # scenery and roads further away than this aren't drawn
 const FAR_LIGHT := 3600.0  # landmark lights beyond this are drawn at this distance
 const FOG_DENSITY := 0.0011
@@ -242,11 +247,9 @@ func _build_scenery() -> void:
 			if kind == "tree":
 				col = Color("1fd672").lerp(Color("d4ff3f"), rng.randf() * 0.6)
 			col = col.lerp(theme["edge"], rng.randf() * 0.3)
-			var key := "%d,%d,%s" % [floori(px / TILE), floori(pz / TILE), kind]
-			if not groups.has(key):
-				groups[key] = []
-			groups[key].append([Transform3D(basis, Vector3(px, ground + size.y * 0.5 - 0.4, pz)), col])
+			_put(groups, kind, Transform3D(basis, Vector3(px, ground + size.y * 0.5 - 0.4, pz)), col)
 		z += SCENERY_GRID
+	_roadside(groups, rng)
 	for key in groups:
 		var items: Array = groups[key]
 		var mm := MultiMesh.new()
@@ -261,8 +264,74 @@ func _build_scenery() -> void:
 		mi.multimesh = mm
 		mi.material_override = _scenery_mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visibility_range_end = FAR_SHOW
+		mi.visibility_range_end = POST_SHOW if key.ends_with(",post") else FAR_SHOW
 		_scenery.add_child(mi)
+
+
+## Beside every road: posts with glowing tops, one side and then the other
+## every POST_GAP / 2 m, so passing them shows the speed (tall lamps in the
+## city); and the area's own scenery, smaller, close to the road. Never on a
+## road, nor where a road curves on to a roundabout.
+func _roadside(groups: Dictionary, rng: RandomNumberGenerator) -> void:
+	var themes := Catalog.themes()
+	var every := int(POST_GAP / Island.STEP)
+	var near_every := int(NEAR_GAP / Island.STEP)
+	for id in island.road_ids:
+		var pts: PackedVector3Array = island.roads[id].points
+		var span := island.road_span(id)
+		# Two points (10 m) clear of where the road's curve on begins.
+		for i in range(span[0] + 2, span[1] - 1):
+			var k := i - span[0]
+			var post_side := 1.0 if k % every == 0 else (-1.0 if k % every == every / 2 else 0.0)
+			var near: bool = k % near_every == 0 and rng.randf() < NEAR_DENSITY[quality]
+			if post_side == 0.0 and not near:
+				continue
+			var d := Vector2(pts[i + 1].x - pts[i - 1].x, pts[i + 1].z - pts[i - 1].z).normalized()
+			var right := Vector3(-d.y, 0.0, d.x)
+			var theme: Dictionary = themes[Island.AREAS[island.area_at(Vector2(pts[i].x, pts[i].z))]["theme"]]
+			var city: bool = theme["scenery"] == "tower"
+			if post_side != 0.0:
+				var at := pts[i] + right * post_side * (Island.ROAD_HALF + POST_OUT)
+				if island.nearest_road(Vector2(at.x, at.z), Island.ROAD_HALF + POST_OUT * 0.8).is_empty():
+					var h := 4.5 if city else 1.3
+					var w := 0.2 if city else 0.14
+					_put(groups, "post", Transform3D(Basis.from_scale(Vector3(w, h, w)),
+							at + Vector3(0.0, h * 0.5 - 0.3, 0.0)), _saturated(theme["edge"]))
+			if near and not city:
+				var kind: String = theme["scenery"]
+				var size := _scenery_size(kind, rng, INF) * rng.randf_range(0.4, 0.75)
+				var side := 1.0 if rng.randf() < 0.5 else -1.0
+				var out := Island.ROAD_HALF + 2.5 + size.x * 0.5 + rng.randf() * 10.0
+				var at := pts[i] + right * side * out + Vector3(d.x, 0.0, d.y) * rng.randf_range(-4.0, 4.0)
+				if not island.nearest_road(Vector2(at.x, at.z), Island.ROAD_HALF + size.x * 0.5 + 1.5).is_empty():
+					continue
+				var basis := Basis(Vector3.UP, rng.randf() * TAU) * Basis.from_scale(Vector3(size.x, size.y, size.x))
+				if kind == "crystal":
+					var axis := Vector3(rng.randf() - 0.5, 0.0, rng.randf() - 0.5).normalized()
+					basis = Basis(axis, rng.randf_range(-0.3, 0.3)) * basis
+				var col: Color = theme["accent"] if rng.randf() < 0.45 else theme["grid"]
+				if kind == "tree":
+					col = Color("1fd672").lerp(Color("d4ff3f"), rng.randf() * 0.6)
+				col = col.lerp(theme["edge"], rng.randf() * 0.3)
+				var ground := island.height_at(at.x, at.z)
+				_put(groups, kind, Transform3D(basis, Vector3(at.x, ground + size.y * 0.5 - 0.4, at.z)), col)
+
+
+## One piece of scenery, into its tile's group of its kind.
+static func _put(groups: Dictionary, kind: String, xf: Transform3D, col: Color) -> void:
+	var key := "%d,%d,%s" % [floori(xf.origin.x / TILE), floori(xf.origin.z / TILE), kind]
+	if not groups.has(key):
+		groups[key] = []
+	groups[key].append([xf, col])
+
+
+## The same hue, as strong as it goes (as road.gdshader's edges): a pale
+## colour drawn bright enough to glow would come out white.
+static func _saturated(c: Color) -> Color:
+	var hi := maxf(c.r, maxf(c.g, c.b))
+	var lo := minf(c.r, minf(c.g, c.b))
+	var k := 1.0 / maxf(hi - lo, 1e-4)
+	return Color((c.r - lo) * k, (c.g - lo) * k, (c.b - lo) * k)
 
 
 ## Width and height of one piece of scenery. Towers are tallest in the city
@@ -539,12 +608,15 @@ func _plain(pts: PackedVector3Array, lift: float) -> ArrayMesh:
 	return _ribbon(pts, 1, pts.size() - 2, along, lift, Route.ROAD_HALF, 0.25, 0.25)
 
 
-## A glowing edge line along points (drawn from 1 to size - 2).
+## A glowing edge line along points (drawn from 1 to size - 2). Its UV.x
+## spans what the road's own edge takes, so the road shader draws the same
+## band and core across it.
 func _line(pts: PackedVector3Array, lift: float) -> ArrayMesh:
 	var along := PackedFloat32Array()
 	along.resize(pts.size() - 2)
 	along.fill(1.0)
-	return _ribbon(pts, 1, pts.size() - 2, along, lift, LINE_HALF, 0.0, 0.0)
+	return _ribbon(pts, 1, pts.size() - 2, along, lift, LINE_HALF, 0.0,
+			LINE_HALF / Route.ROAD_HALF)
 
 
 ## Road through points i0 to i1, `half` m either side, `lift` m above the
@@ -577,7 +649,7 @@ func _scenery_mesh(kind: String) -> Mesh:
 		return _scenery_meshes[kind]
 	var m: Mesh
 	match kind:
-		"cube", "tower":
+		"cube", "tower", "post":
 			m = BoxMesh.new()
 		"pyramid":
 			var c := CylinderMesh.new()

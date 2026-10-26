@@ -214,8 +214,9 @@ per rider in `data/bike-game/riders/`.
   layouts were cross-checked against Auuki's (`src/ble/ftms/` in
   dvmarinoff/Auuki).
 - `game/`: Godot 4.7 and GDScript, on the Compatibility renderer (OpenGL).
-  Everything is built from code: the island, the bike and rider from glowing
-  tubes, the menus and the HUD.
+  Everything is built from code: the island, the bike from glowing tubes,
+  the rider from smooth shapes in a neon suit (`bicycle.gd`, `loft.gd`),
+  the menus and the HUD.
   - The island (`scripts/island.gd`) is its places and the roads between
     them, laid out by hand; the bends, hills and land between the roads are
     generated from that. The land's heights are worked out when the image is
